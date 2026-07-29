@@ -1,0 +1,8 @@
+{
+  "name": "grajek_audio",
+  "version": "0.1.0",
+  "description": "Portable synthesis engine for grajek — pure C++17, zero Arduino/ESP32 dependencies",
+  "build": {
+    "srcDir": "src"
+  }
+}

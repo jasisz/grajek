@@ -1,0 +1,158 @@
+// PC target: the same engine that runs on the ESP32, rendered to WAV files.
+// Usage: ./grajek_host [output_dir]
+#include <stdio.h>
+#include <math.h>
+#include <algorithm>
+#include <functional>
+#include <string>
+#include <vector>
+
+#include "ga_engine.h"
+#include "ga_scales.h"
+#include "wav_writer.h"
+
+using namespace ga;
+
+namespace {
+
+constexpr int kSr = 48000;
+constexpr int kBlock = 128;
+
+struct Cue {
+  double t;
+  std::function<void(Engine&)> fn;
+};
+
+void renderSong(const std::string& path, double seconds, Engine& e,
+                std::vector<Cue> cues) {
+  std::stable_sort(cues.begin(), cues.end(),
+                   [](const Cue& a, const Cue& b) { return a.t < b.t; });
+  const size_t total = (size_t)(seconds * kSr);
+  std::vector<int16_t> pcm;
+  pcm.reserve(total);
+  float buf[kBlock];
+  size_t done = 0, cueIdx = 0;
+  float peak = 0.0f;
+  double sumSq = 0.0;
+  while (done < total) {
+    const double t = (double)done / kSr;
+    while (cueIdx < cues.size() && cues[cueIdx].t <= t) {
+      cues[cueIdx].fn(e);
+      ++cueIdx;
+    }
+    const int n = (int)std::min((size_t)kBlock, total - done);
+    e.process(buf, n);
+    for (int i = 0; i < n; ++i) {
+      const float s = buf[i];
+      peak = std::max(peak, fabsf(s));
+      sumSq += (double)s * s;
+      float c = s > 1.0f ? 1.0f : (s < -1.0f ? -1.0f : s);
+      pcm.push_back((int16_t)(c * 32767.0f));
+    }
+    done += n;
+  }
+  if (!writeWavMono16(path.c_str(), pcm.data(), pcm.size(), kSr)) {
+    fprintf(stderr, "ERROR: cannot write %s\n", path.c_str());
+    return;
+  }
+  const double rms = sqrt(sumSq / (double)total);
+  printf("  %-38s %5.1fs  peak %.3f  rms %6.1f dBFS\n", path.c_str(), seconds,
+         peak, 20.0 * log10(rms + 1e-12));
+}
+
+void demoSingleNote(const std::string& dir) {
+  Engine e;
+  e.init(kSr);
+  std::vector<Cue> c = {
+      {0.00, [](Engine& en) {
+         en.setParam(Param::TimbrePreset, 0);
+         en.setParam(Param::BaseHz, 220.0f);
+         en.setParam(Param::FilterCutoffHz, 6000.0f);
+       }},
+      {0.05, [](Engine& en) { en.noteOn(1, 0.0f, 0.9f); }},
+      {2.05, [](Engine& en) { en.noteOff(1); }},
+  };
+  renderSong(dir + "/01_single_note.wav", 3.5, e, c);
+}
+
+void demoGrid(const std::string& dir) {
+  Engine e;
+  e.init(kSr);
+  std::vector<Cue> c = {
+      {0.00, [](Engine& en) {
+         en.setParam(Param::TimbrePreset, 0);
+         en.setParam(Param::BaseHz, 220.0f);
+         en.setParam(Param::FilterCutoffHz, 6000.0f);
+       }},
+  };
+  // walk the bottom grid row in 19-EDO...
+  double t = 0.1;
+  for (int col = 0; col < kGridCols; ++col) {
+    const float cents = gridToCents(ScaleId::EDO19, col, 0);
+    c.push_back({t, [cents, col](Engine& en) { en.noteOn(100 + col, cents, 0.85f); }});
+    c.push_back({t + 0.26, [col](Engine& en) { en.noteOff(100 + col); }});
+    t += 0.28;
+  }
+  // ...then the same walk in just intonation (11-limit) for comparison
+  t += 0.6;
+  for (int col = 0; col < kGridCols; ++col) {
+    const float cents = gridToCents(ScaleId::JI11, col, 0);
+    c.push_back({t, [cents, col](Engine& en) { en.noteOn(200 + col, cents, 0.85f); }});
+    c.push_back({t + 0.26, [col](Engine& en) { en.noteOff(200 + col); }});
+    t += 0.28;
+  }
+  renderSong(dir + "/02_grid_19edo_and_ji.wav", t + 1.5, e, c);
+}
+
+void demoDrone(const std::string& dir) {
+  Engine e;
+  e.init(kSr);
+  std::vector<Cue> c = {
+      {0.00, [](Engine& en) {
+         en.setParam(Param::TimbrePreset, 1);
+         en.setParam(Param::BaseHz, 110.0f);
+         en.setParam(Param::FilterCutoffHz, 700.0f);
+         en.setParam(Param::FilterRes, 0.25f);
+         en.setParam(Param::MasterGain, 0.45f);
+       }},
+      // JI chord: 1/1, 3/2, 7/4, 5/4 an octave up
+      {0.20, [](Engine& en) { en.noteOn(1, 0.0f, 1.0f); }},
+      {2.00, [](Engine& en) { en.noteOn(2, 702.0f, 0.8f); }},
+      {4.00, [](Engine& en) { en.noteOn(3, 968.8f, 0.7f); }},
+      {6.00, [](Engine& en) { en.noteOn(4, 1586.3f, 0.55f); }},
+      {17.0, [](Engine& en) { en.allNotesOff(); }},
+  };
+  // slow filter open/close — breathing
+  for (double tt = 0.5; tt < 17.0; tt += 0.25) {
+    const float cut = 650.0f + 500.0f * (0.5f + 0.5f * (float)sin(kTau * tt / 13.0));
+    c.push_back({tt, [cut](Engine& en) { en.setParam(Param::FilterCutoffHz, cut); }});
+  }
+  renderSong(dir + "/03_drone.wav", 20.0, e, c);
+}
+
+void printGridTables() {
+  printf("\nGrid (bottom row, BaseHz=220):\n");
+  for (int s = 0; s < (int)ScaleId::Count; ++s) {
+    const ScaleId id = (ScaleId)s;
+    printf("  %-12s (%s)\n    ", scaleInfo(id).name, scaleInfo(id).desc);
+    for (int col = 0; col < kGridCols; ++col) {
+      const float hz = 220.0f * exp2f(gridToCents(id, col, 0) / 1200.0f);
+      printf("%.1f ", hz);
+    }
+    printf("Hz\n");
+  }
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  const std::string dir = argc > 1 ? argv[1] : "out";
+  printf("grajek_host — engine at %d Hz, %d-sample blocks\n", kSr, kBlock);
+  printf("Rendering into: %s/\n\n", dir.c_str());
+  demoSingleNote(dir);
+  demoGrid(dir);
+  demoDrone(dir);
+  printGridTables();
+  printf("\nListen:  afplay %s/01_single_note.wav\n", dir.c_str());
+  return 0;
+}

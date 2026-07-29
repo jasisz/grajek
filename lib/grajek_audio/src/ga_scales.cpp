@@ -1,0 +1,58 @@
+#include "ga_scales.h"
+#include <math.h>
+
+namespace ga {
+
+namespace {
+
+struct Ratio { int num, den; };
+
+// 14 ascending 11-limit intervals within the octave, in the spirit of
+// Partch's tonality diamond.
+constexpr Ratio kJi11[kGridCols] = {
+    {1, 1}, {12, 11}, {9, 8}, {7, 6}, {6, 5}, {5, 4}, {4, 3},
+    {11, 8}, {3, 2}, {14, 9}, {8, 5}, {5, 3}, {7, 4}, {11, 6},
+};
+
+struct Ji11Cents {
+  float c[kGridCols];
+  Ji11Cents() {
+    for (int i = 0; i < kGridCols; ++i)
+      c[i] = 1200.0f * log2f((float)kJi11[i].num / (float)kJi11[i].den);
+  }
+};
+
+const float* ji11Cents() {
+  static Ji11Cents t;
+  return t.c;
+}
+
+int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+}  // namespace
+
+const ScaleInfo& scaleInfo(ScaleId s) {
+  static const ScaleInfo infos[(int)ScaleId::Count] = {
+      {"12-EDO", "row = +5 steps (fourth)"},
+      {"19-EDO", "row = +8 steps (fourth)"},
+      {"31-EDO", "row = +13 steps (fourth)"},
+      {"JI 11-limit", "14 ratios/octave, row = +octave"},
+  };
+  int i = (int)s;
+  if (i < 0 || i >= (int)ScaleId::Count) i = 0;
+  return infos[i];
+}
+
+float gridToCents(ScaleId s, int col, int row) {
+  col = clampi(col, 0, kGridCols - 1);
+  row = clampi(row, 0, kGridRows - 1);
+  switch (s) {
+    case ScaleId::EDO12: return (float)(col + row * 5) * 100.0f;
+    case ScaleId::EDO19: return (float)(col + row * 8) * (1200.0f / 19.0f);
+    case ScaleId::EDO31: return (float)(col + row * 13) * (1200.0f / 31.0f);
+    case ScaleId::JI11:  return ji11Cents()[col] + (float)row * 1200.0f;
+    default:             return (float)col * 100.0f;
+  }
+}
+
+}  // namespace ga

@@ -1,0 +1,6 @@
+.pio/
+.venv/
+host/build/
+host/out/
+.vscode/
+.DS_Store
