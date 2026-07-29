@@ -7,8 +7,11 @@
 #include <string>
 #include <vector>
 
+#include "ga_echo.h"
 #include "ga_engine.h"
+#include "ga_reverb.h"
 #include "ga_scales.h"
+#include "ga_strings.h"
 #include "wav_writer.h"
 
 using namespace ga;
@@ -23,10 +26,25 @@ struct Cue {
   std::function<void(Engine&)> fn;
 };
 
+// Renders through the FULL instrument chain (strings, aging tape, reverb) —
+// the demo files should sound like the instrument, not like a bare engine.
 void renderSong(const std::string& path, double seconds, Engine& e,
-                std::vector<Cue> cues) {
+                std::vector<Cue> cues, float rootHz = 220.0f) {
   std::stable_sort(cues.begin(), cues.end(),
                    [](const Cue& a, const Cue& b) { return a.t < b.t; });
+
+  static Reverb reverb;  // ~55 KB of state — keep it off the stack
+  reverb.init(kSr);
+  reverb.setWet(0.35f);
+  SympatheticStrings strings;
+  strings.init(kSr);
+  strings.setRootHz(rootHz);
+  std::vector<int16_t> tape((size_t)(4.0 * kSr));
+  EchoTape echo;
+  echo.init(tape.data(), (uint32_t)tape.size(), (float)kSr);
+  echo.setFeedback(0.55f);
+  echo.setLevel(0.5f);
+
   const size_t total = (size_t)(seconds * kSr);
   std::vector<int16_t> pcm;
   pcm.reserve(total);
@@ -42,6 +60,10 @@ void renderSong(const std::string& path, double seconds, Engine& e,
     }
     const int n = (int)std::min((size_t)kBlock, total - done);
     e.process(buf, n);
+    strings.process(buf, buf, n);
+    echo.process(buf, buf, n);
+    reverb.process(buf, n);
+    for (int i = 0; i < n; ++i) buf[i] = softClip(buf[i]) * 0.85f;
     for (int i = 0; i < n; ++i) {
       const float s = buf[i];
       peak = std::max(peak, fabsf(s));
@@ -127,7 +149,7 @@ void demoDrone(const std::string& dir) {
     const float cut = 650.0f + 500.0f * (0.5f + 0.5f * (float)sin(kTau * tt / 13.0));
     c.push_back({tt, [cut](Engine& en) { en.setParam(Param::FilterCutoffHz, cut); }});
   }
-  renderSong(dir + "/03_drone.wav", 20.0, e, c);
+  renderSong(dir + "/03_drone.wav", 20.0, e, c, 110.0f);
 }
 
 void printGridTables() {

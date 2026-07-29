@@ -1,6 +1,55 @@
 # grajek
 
-An experimental musical instrument on the **M5Stack Cardputer-ADV** (ESP32-S3).
+A pocket instrument that **cannot be played badly** — built by a dad for his
+kid, on an **M5Stack Cardputer-ADV** (ESP32-S3, ~$60 off the shelf).
+
+You throw it, tilt it, click it, sing into it — and something beautiful
+comes out. Under the toy there is a serious synthesis engine: just
+intonation in the spirit of Harry Partch, an aging tape loop, sympathetic
+string resonators, and a heartbeat that follows *your* tempo instead of
+imposing one.
+
+## Why
+
+It started as an experimental microtonal instrument and, iteration by
+iteration ("where's the fun?", "too dark", "I hate toys that nag"),
+converged on its real purpose: a first instrument for a child. These are
+the design laws that survived the process:
+
+1. **Impossible to play badly.** Pentatonic just intonation by default,
+   equal-loudness key tracking, polyphony compensation, no failure states —
+   any random key, any random pair of keys, sounds intentional.
+2. **Cat, not Furby.** The box never solicits play. Every sound traces back
+   to a human act: pick it up and it purrs, play and it remembers, leave it
+   and it goes quiet. The microphone runs only while a key is held; nothing
+   is ever stored.
+3. **Tempo is discovered, not declared.** There is no BPM anywhere. Play a
+   few even notes and a quiet heart joins in *your* time (a phase-locked
+   loop on your key presses); drift into rubato and it lets go.
+4. **It grows with the child.** One parent gesture cycles three tiers:
+   2-3 (every key plays, nothing to break), 4-6 (grid + the happy scales),
+   7+ (everything, Partch included).
+5. **Memory is the soul.** It saves what you taught it — your background
+   chord, your scale, the notes you played — and greets you the next day
+   with one of them.
+
+The gestures on top: **toss** the box and the whole music lifts in a
+glissando, landing re-rooted on a pure-ratio rung (flight time picks the
+interval, spin picks the direction); **freeze** the last seconds of the
+ambient memory into a persistent floor, retroactively; **sing** into the
+ear and the tape returns you, darker each pass, haloed by strings tuned to
+pure intervals.
+
+## Status
+
+- **Laptop rig (macOS)**: fully playable, this is where everything is
+  designed and measured — see below.
+- **Device firmware**: compiles, whole chain ported (engine → strings →
+  lo-fi tape → reverb, ambient brain, IMU toss). **Not yet verified on
+  hardware** — flashing checklist below.
+
+---
+
 Priority: low latency and smooth sound — this is a live instrument.
 
 ## Layout
