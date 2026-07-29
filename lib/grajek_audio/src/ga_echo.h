@@ -32,8 +32,9 @@ class EchoTape {
     pos_ = 0;
     sr_ = sampleRate;
     memset(buf_, 0, frames * sizeof(int16_t));
-    // aging-filter coefficients (one-pole)
-    kLp_ = 1.0f - expf(-kTau * 3000.0f / sampleRate);
+    // aging-filter coefficients (one-pole); LP at 4.5 kHz — repeats age
+    // noticeably but the tape stops sounding like a cellar
+    kLp_ = 1.0f - expf(-kTau * 4500.0f / sampleRate);
     kHp_ = 1.0f - expf(-kTau * 150.0f / sampleRate);
     lp_ = hpLp_ = 0.0f;
     wob_ = wobTarget_ = 0.0f;

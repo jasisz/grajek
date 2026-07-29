@@ -29,12 +29,13 @@ Timbre timbrePreset(int idx) {
       break;
     case 3:  // CHIME — bright music-box ping, uppers melt into a pure tone
       t.ratio[0] = 1; t.ratio[1] = 2; t.ratio[2] = 3; t.ratio[3] = 4;
-      t.gain[0] = 0.85f; t.gain[1] = 0.3f; t.gain[2] = 0.22f; t.gain[3] = 0.14f;
-      t.pdecay[0] = 0.0f; t.pdecay[1] = 1.2f; t.pdecay[2] = 0.4f;
-      t.pdecay[3] = 0.2f;
+      t.gain[0] = 0.8f; t.gain[1] = 0.35f; t.gain[2] = 0.26f; t.gain[3] = 0.16f;
+      // uppers linger much longer — the melt stays, the gloom goes
+      t.pdecay[0] = 0.0f; t.pdecay[1] = 2.5f; t.pdecay[2] = 1.0f;
+      t.pdecay[3] = 0.5f;
       t.detuneCents = 0.25f;
       t.shimmer = 0.9f;
-      t.attack = 0.003f; t.decay = 0.5f; t.sustain = 0.5f; t.release = 2.8f;
+      t.attack = 0.003f; t.decay = 0.5f; t.sustain = 0.55f; t.release = 2.8f;
       break;
   }
   return t;

@@ -275,7 +275,7 @@ struct Ui {
   int preset = 3;  // CHIME — the "pretty by itself" default
   int octave = 2;  // 220 Hz
   bool latch = false;
-  float cutoff = 6000.0f;   // player's base — the weather drifts around it
+  float cutoff = 7500.0f;   // player's base — the weather drifts around it
   float wetBase = 0.35f;    // player's reverb base (SHIFT+V), same deal
   float bend = 0.0f;
 };
@@ -342,8 +342,9 @@ void weatherTick(const Ui& ui) {
     g_reverb.setWet(
         clampf(ui.wetBase * (0.85f + 0.35f * breathe) + 0.03f * t3,
                0.10f, 0.60f));
-  // a touch darker in silence, tide-drifted around the player's base
-  const float ratio = (0.90f + 0.18f * t3) * (1.0f - 0.15f * breathe);
+  // barely darker in silence, tide-drifted around the player's base —
+  // an earlier 15% dip stacked with the aging tape into gloom
+  const float ratio = (0.95f + 0.15f * t3) * (1.0f - 0.07f * breathe);
   g_engine.setParam(Param::FilterCutoffHz,
                     clampf(ui.cutoff * ratio, 300.0f, 12000.0f));
 
@@ -579,7 +580,7 @@ int main(int argc, char** argv) {
   g_engine.init(kSr);
   g_engine.setParam(Param::TimbrePreset, 3);  // CHIME
   g_engine.setParam(Param::BaseHz, 220.0f);
-  g_engine.setParam(Param::FilterCutoffHz, 6000.0f);
+  g_engine.setParam(Param::FilterCutoffHz, 7500.0f);
   g_reverb.init(kSr);
   g_reverb.setWet(0.35f);
   g_strings.init((float)kSr);

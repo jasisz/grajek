@@ -14,7 +14,7 @@ const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED",
                                                "CHIME"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 constexpr float kImuPeriod = 0.02f;  // 50 Hz IMU reads
-constexpr float kNeutralCutoff = 6000.0f;
+constexpr float kNeutralCutoff = 7500.0f;
 // JI ladder for toss landings (flight time -> rung; spin sign -> direction)
 const float kRungCents[5] = {203.9f, 386.3f, 702.0f, 968.8f, 1200.0f};
 }  // namespace

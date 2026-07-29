@@ -21,7 +21,7 @@ int32_t s_bgNextId = 2;   // rotates through ids 1000..1015
 // --- weather ---
 uint32_t s_weatherLastMs = 0;
 int s_fifthVariant = 0;  // 0 = 3/2, 1 = 7/4 (default background only)
-float s_cutoffBase = 6000.0f;
+float s_cutoffBase = 7500.0f;
 
 // --- ghost garden ---
 struct Mem { float cents; };
@@ -78,7 +78,7 @@ void weatherTick(uint32_t nowMs) {
   }
   hal::reverb().setWet(
       ga::clampf(0.30f * (0.85f + 0.35f * breathe) + 0.03f * t3, 0.10f, 0.55f));
-  const float ratio = (0.90f + 0.18f * t3) * (1.0f - 0.15f * breathe);
+  const float ratio = (0.95f + 0.15f * t3) * (1.0f - 0.07f * breathe);
   s_engine->setParam(ga::Param::FilterCutoffHz,
                      ga::clampf(s_cutoffBase * ratio, 300.0f, 12000.0f));
 

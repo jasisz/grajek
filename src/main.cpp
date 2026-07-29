@@ -84,7 +84,7 @@ void setup() {
     Serial.println("grajek: canvas allocation FAILED");
 
   engine.init(48000.0f);
-  engine.setParam(ga::Param::FilterCutoffHz, 6000.0f);
+  engine.setParam(ga::Param::FilterCutoffHz, 7500.0f);
   engine.setParam(ga::Param::TimbrePreset, 3.0f);  // CHIME by default
 
   audioOk = hal::audioInit(&engine);

@@ -75,9 +75,9 @@ class SympatheticStrings {
         const float rd = ((float)buf_[s][i0] * (1.0f - frac) +
                           (float)buf_[s][i1] * frac) *
                          (1.0f / 32768.0f);
-        // gentle damping keeps the ring warm, the DC blocker keeps the
-        // near-unity feedback loop honest
-        damp_[s] += 0.30f * (rd - damp_[s]);
+        // gentle damping keeps the ring warm (0.45 ≈ brighter ~4.5 kHz
+        // ring), the DC blocker keeps the near-unity feedback loop honest
+        damp_[s] += 0.45f * (rd - damp_[s]);
         const float hp = damp_[s] - dcX_[s] + 0.995f * dcY_[s];
         dcX_[s] = damp_[s];
         dcY_[s] = hp;

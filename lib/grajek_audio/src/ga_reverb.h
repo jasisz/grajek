@@ -46,7 +46,7 @@ class Reverb {
   float hpLp_ = 0.0f;
   std::atomic<float> wet_{0.35f};
   std::atomic<float> room_{0.84f};  // stored as comb feedback
-  std::atomic<float> damp_{0.25f};
+  std::atomic<float> damp_{0.18f};  // brighter tail — air, not fog
 };
 
 }  // namespace ga
