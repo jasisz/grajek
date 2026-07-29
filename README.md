@@ -30,11 +30,20 @@ afplay out/01_single_note.wav
 
 `grajek_live`: 4 laptop keyboard rows = 4 instrument grid rows (the bottom
 `zxcv…` row plays lowest). A terminal has no key-up events, so a note fades
-0.6 s after release (auto-repeat sustains it), and **SPACE toggles LATCH
+0.6 s after release (auto-repeat sustains it), and **SHIFT+L toggles LATCH
 mode**: a key press turns a note on permanently, a second press turns it
 off — that is how you build drones. `TAB` scale, `` ` `` timbre, `BACKSPACE`
 octave, arrows = IMU stand-in (left/right bend, up/down filter), `ENTER`
-panic, `ESC` quit.
+panic + re-center, `ESC` quit.
+
+**Toss simulator** (prototype of the device's throw gesture — on hardware the
+IMU will drive it): `SPACE` throws the whole music into a rising glissando
+(synth bend + loop varispeed together), arrows **during flight** add spin
+(right = land upward/otonal, left = land downward/utonal; more spin = flight
+warble + a dizzy landing), `SPACE` again catches: flight time picks the rung
+of the JI ladder (9/8, 5/4, 3/2, 7/4, 2/1) and everything lands re-rooted on
+the new tonal center. `SHIFT+X` = fumble: tape-dive crash, the top loop layer
+is lost.
 
 **Looper** (`lib/grajek_audio/ga_looper.*` — the same core the device LOOP
 mode will use, fed there by the microphone): `SHIFT+R` starts the first

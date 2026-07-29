@@ -47,6 +47,18 @@ class Looper {
   }
   float playbackLevel() const { return level_.load(std::memory_order_relaxed); }
 
+  // Varispeed: tape-style playback rate (pitch and tempo together), smoothed
+  // in the audio thread. 1.0 = as recorded. Used by the toss gesture — the
+  // whole loop lifts in flight and lands on a new tonal center — and by the
+  // fumble crash (rate dive). Overdub writing pauses while rate is away from
+  // 1.0 (positions would smear across the layer buffer).
+  void setRate(float v) {
+    if (v < 0.1f) v = 0.1f;
+    if (v > 4.0f) v = 4.0f;
+    rateTarget_.store(v, std::memory_order_relaxed);
+  }
+  float rate() const { return rateTarget_.load(std::memory_order_relaxed); }
+
   // --- audio thread: records `in`, ADDS loop playback into `out` ---
   // `in` and `out` may alias (the input is read before the output is written).
   void process(const float* in, float* out, int n);
@@ -84,6 +96,9 @@ class Looper {
 
   std::atomic<uint32_t> cmds_{0};
   std::atomic<float> level_{1.0f};
+  std::atomic<float> rateTarget_{1.0f};
+  float rate_ = 1.0f;   // audio-thread only, smoothed toward rateTarget_
+  double posF_ = 0.0;   // audio-thread only, fractional playhead
   std::atomic<State> state_{State::Empty};
   std::atomic<uint32_t> length_{0};
   std::atomic<uint32_t> pos_{0};

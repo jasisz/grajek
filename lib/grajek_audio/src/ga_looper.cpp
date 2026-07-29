@@ -1,5 +1,6 @@
 #include "ga_looper.h"
 
+#include <math.h>
 #include <string.h>
 
 namespace ga {
@@ -14,6 +15,9 @@ void Looper::init(int16_t* mix, int16_t* layer, int16_t* undo,
   state_.store(State::Empty);
   length_.store(0);
   pos_.store(0);
+  posF_ = 0.0;
+  rate_ = 1.0f;
+  rateTarget_.store(1.0f);
   layers_.store(0);
   undoOk_.store(false);
   memset(mix_, 0, maxFrames * sizeof(int16_t));
@@ -48,6 +52,7 @@ void Looper::applyCommands() {
     state_.store(State::Empty);
     length_.store(0);
     pos_.store(0);
+  posF_ = 0.0;
     layers_.store(0);
     undoOk_.store(false);
     return;
@@ -59,11 +64,13 @@ void Looper::applyCommands() {
         s = State::RecordFirst;
         length_.store(0);
         pos_.store(0);
+  posF_ = 0.0;
         break;
       case State::RecordFirst:
         if (length_.load(std::memory_order_relaxed) > 0) {
           s = State::Play;
           pos_.store(0);
+  posF_ = 0.0;
           layers_.store(1);
           undoOk_.store(false);
         } else {
@@ -76,6 +83,7 @@ void Looper::applyCommands() {
       case State::Stopped:
         s = State::Overdub;  // restart playback and record on top
         pos_.store(0);
+  posF_ = 0.0;
         break;
       case State::Overdub:
         commitLayer();
@@ -89,11 +97,13 @@ void Looper::applyCommands() {
       case State::Play:
         s = State::Stopped;
         pos_.store(0);
+  posF_ = 0.0;
         break;
       case State::Overdub:
         commitLayer();
         s = State::Stopped;
         pos_.store(0);
+  posF_ = 0.0;
         break;
       case State::Stopped:
         s = State::Play;
@@ -132,6 +142,7 @@ void Looper::process(const float* in, float* out, int n) {
           length_.store(w);
           layers_.store(1);
           pos_.store(0);
+  posF_ = 0.0;
           undoOk_.store(false);
           state_.store(State::Play);
           return;
@@ -146,23 +157,36 @@ void Looper::process(const float* in, float* out, int n) {
     case State::Overdub: {
       const uint32_t len = length_.load(std::memory_order_relaxed);
       if (len == 0) return;
-      uint32_t p = pos_.load(std::memory_order_relaxed);
+      // varispeed: smooth the rate per block, read with linear interpolation
+      rate_ += 0.03f * (rateTarget_.load(std::memory_order_relaxed) - rate_);
+      // overdub writes pause while the tape is off-speed — fractional write
+      // positions would smear the layer
+      const bool writing = (s == State::Overdub) && fabsf(rate_ - 1.0f) < 0.02f;
+      double p = posF_;
+      if (p >= (double)len) p = 0.0;
       const float k =
           (1.0f / 32768.0f) * level_.load(std::memory_order_relaxed);
       for (int i = 0; i < n; ++i) {
-        float playback = (float)mix_[p];
+        const uint32_t i0 = (uint32_t)p;
+        uint32_t i1 = i0 + 1;
+        if (i1 >= len) i1 = 0;
+        const float frac = (float)(p - (double)i0);
+        float playback =
+            (float)mix_[i0] * (1.0f - frac) + (float)mix_[i1] * frac;
         if (s == State::Overdub) {
           // Read the layer BEFORE adding this sample: material from earlier
           // wraps of the session is audible, but the live input is not
           // doubled (it is already heard dry via the caller's path).
-          const int16_t prev = layer_[p];
-          layer_[p] = satAdd(prev, sat(in[i] * 32767.0f));
+          const int16_t prev = layer_[i0];
+          if (writing) layer_[i0] = satAdd(prev, sat(in[i] * 32767.0f));
           playback += (float)prev;
         }
         out[i] += playback * k;
-        if (++p >= len) p = 0;
+        p += (double)rate_;
+        while (p >= (double)len) p -= (double)len;
       }
-      pos_.store(p);
+      posF_ = p;
+      pos_.store((uint32_t)p);
       return;
     }
   }

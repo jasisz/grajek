@@ -10,18 +10,32 @@
 // A terminal never reports key releases, so:
 //  - normal mode: a note decays ~0.6 s after the last repeat (holding a key
 //    sustains it via the OS auto-repeat),
-//  - LATCH mode (space): a press turns the note on permanently, a second
+//  - LATCH mode (SHIFT+L): a press turns the note on permanently, a second
 //    press turns it off — for building drones and chords.
 //
-// Controls: TAB scale | ` timbre | BACKSPACE base octave | SPACE latch
+// Controls: TAB scale | ` timbre | BACKSPACE base octave | SHIFT+L latch
 //           left/right arrows: pitch bend (IMU stand-in) | up/down: filter
-//           ENTER panic (silence + bend reset; keeps the loop) | ESC quit
+//           ENTER panic (silence + bend + re-center; keeps the loop) | ESC quit
 //
 // Looper (records what you play, layers on top — same core as the device's
-// future LOOP mode, which will be fed by the microphone instead):
+// future LOOP mode, fed there by the microphone):
 //           SHIFT+R record: 1st press starts the loop, 2nd closes it,
 //                   after that it toggles overdub (each take = one layer)
 //           SHIFT+P play/stop | SHIFT+U undo last layer | SHIFT+C clear
+//           SHIFT+[ / SHIFT+] loop volume down/up
+//
+// TOSS SIMULATOR (prototype of the device's throw gesture — on hardware the
+// IMU drives this; here the keyboard fakes it):
+//           SPACE 1st press = throw: the WHOLE music (synth + loop varispeed)
+//                 lifts in a glissando for as long as it "flies"
+//           left/right arrows DURING flight = spin (each press adds a flip;
+//                 right = land upward/otonal, left = land downward/utonal;
+//                 more spin = audible wobble in flight + dizzy landing)
+//           SPACE 2nd press = catch: flight time picks the rung of the JI
+//                 ladder (9/8, 5/4, 3/2, 7/4, 2/1) and the whole music lands
+//                 re-rooted on the new tonal center
+//           SHIFT+X = fumble: the music falls (tape dive) and the top loop
+//                 layer is lost; during flight = crash landing (no modulation)
 #include <AudioToolbox/AudioToolbox.h>
 #include <signal.h>
 #include <termios.h>
@@ -31,6 +45,7 @@
 #include <time.h>
 
 #include <chrono>
+#include <functional>
 #include <vector>
 
 #include "ga_engine.h"
@@ -128,6 +143,11 @@ double nowSec() {
 const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 
+// JI ladder for toss landings; sign of spin mirrors it downward (utonal).
+constexpr int kNumRungs = 5;
+const float kRungCents[kNumRungs] = {203.9f, 386.3f, 702.0f, 968.8f, 1200.0f};
+const char* kRungNames[kNumRungs] = {"9/8", "5/4", "3/2", "7/4", "2/1"};
+
 struct Ui {
   int scale = (int)ScaleId::EDO19;
   int preset = 0;
@@ -136,6 +156,43 @@ struct Ui {
   float cutoff = 6000.0f;
   float bend = 0.0f;
 };
+
+// --- toss simulator state ---
+struct Sim {
+  bool inFlight = false;
+  double t0 = 0.0;
+  int spin = 0;             // arrow presses during flight; sign = direction
+  float centerCents = 0.0f; // accumulated tonal-center offset
+  float rateBase = 1.0f;    // loop varispeed matching the center
+};
+Sim g_sim;
+
+struct TimedFn {
+  double t;
+  std::function<void()> fn;
+};
+std::vector<TimedFn> g_pending;
+
+void schedule(double delaySec, std::function<void()> fn) {
+  g_pending.push_back({nowSec() + delaySec, std::move(fn)});
+}
+
+void runPending() {
+  const double t = nowSec();
+  for (size_t i = 0; i < g_pending.size();) {
+    if (g_pending[i].t <= t) {
+      g_pending[i].fn();
+      g_pending.erase(g_pending.begin() + (long)i);
+    } else {
+      ++i;
+    }
+  }
+}
+
+void applyCenter(const Ui& ui) {
+  g_engine.setParam(Param::BaseHz, kBaseOctaves[ui.octave] *
+                                       exp2f(g_sim.centerCents / 1200.0f));
+}
 
 const char* loopStateName(Looper::State s) {
   switch (s) {
@@ -149,10 +206,10 @@ const char* loopStateName(Looper::State s) {
 }
 
 void printStatus(const Ui& ui) {
-  printf("\r\x1b[K[%s] timbre:%s base:%.0fHz latch:%s filter:%.0fHz bend:%+.0fc voices:%d",
+  printf("\r\x1b[K[%s] %s %.0fHz latch:%s flt:%.0fHz voices:%d",
          scaleInfo((ScaleId)ui.scale).name, kPresetNames[ui.preset],
-         kBaseOctaves[ui.octave], ui.latch ? "ON " : "off",
-         ui.cutoff, ui.bend, g_engine.activeVoiceCount());
+         kBaseOctaves[ui.octave], ui.latch ? "ON " : "off", ui.cutoff,
+         g_engine.activeVoiceCount());
   const Looper::State ls = g_looper.state();
   if (ls == Looper::State::Empty) {
     printf(" loop:--");
@@ -163,6 +220,11 @@ void printStatus(const Ui& ui) {
            g_looper.layerCount(), (float)g_looper.positionFrames() / kSr,
            (float)g_looper.lengthFrames() / kSr,
            g_looper.playbackLevel() * 100.0f);
+  }
+  if (g_sim.inFlight) {
+    printf("  LOT %.2fs spin:%+d", nowSec() - g_sim.t0, g_sim.spin);
+  } else if (g_sim.centerCents != 0.0f) {
+    printf("  centrum:%+.0fc tempo:%.2fx", g_sim.centerCents, g_sim.rateBase);
   }
   printf(" ");
   fflush(stdout);
@@ -176,6 +238,85 @@ void allOff() {
 void sleepMs(int ms) {
   struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};
   nanosleep(&ts, nullptr);
+}
+
+// Non-blocking single-byte read with a small timeout (for ESC sequences).
+int readByte(int timeoutMs) {
+  for (int waited = 0;; waited += 2) {
+    char c = 0;
+    if (read(STDIN_FILENO, &c, 1) == 1) return (unsigned char)c;
+    if (waited >= timeoutMs) return -1;
+    sleepMs(2);
+  }
+}
+
+// --- toss mechanics ---
+// Altitude curve: cents of lift as a function of flight time.
+float flightAltCents(double t) {
+  float a = (float)(620.0 * t);
+  return a > 1250.0f ? 1250.0f : a;
+}
+
+void flightUpdate(const Ui& ui) {
+  const double t = nowSec() - g_sim.t0;
+  const float alt = flightAltCents(t);
+  // spin is audible in flight: a pitch warble, faster/wider with more flips
+  const float wob =
+      (float)g_sim.spin * 14.0f * sinf((float)(2.0 * 3.14159265 * 5.5 * t));
+  g_engine.setParam(Param::BendCents, alt + wob);
+  g_looper.setRate(g_sim.rateBase * exp2f(alt / 1200.0f));
+  (void)ui;
+}
+
+void land(Ui& ui) {
+  const double t = nowSec() - g_sim.t0;
+  g_sim.inFlight = false;
+  if (t < 0.15) {  // too short to count as a throw
+    g_engine.setParam(Param::BendCents, 0.0f);
+    g_looper.setRate(g_sim.rateBase);
+    printf("\n  >> za krotki lot — nic sie nie stalo\n");
+    return;
+  }
+  int rung = (int)(t / 0.38) + 1;
+  if (rung > kNumRungs) rung = kNumRungs;
+  const float dir = g_sim.spin < 0 ? -1.0f : 1.0f;
+  const float landCents = dir * kRungCents[rung - 1];
+  g_sim.centerCents = clampf(g_sim.centerCents + landCents, -2400.0f, 2400.0f);
+  applyCenter(ui);
+  g_sim.rateBase = clampf(g_sim.rateBase * exp2f(landCents / 1200.0f),
+                          0.25f, 4.0f);
+  g_looper.setRate(g_sim.rateBase);
+  g_engine.setParam(Param::BendCents, 0.0f);
+
+  // dizziness: the more spin, the more the landing wobbles before settling
+  const int flips = g_sim.spin < 0 ? -g_sim.spin : g_sim.spin;
+  const int wobbles = flips > 4 ? 4 : flips;
+  for (int k = 1; k <= wobbles; ++k) {
+    const float amp = 70.0f / (float)k * (k % 2 == 0 ? 1.0f : -1.0f);
+    schedule(0.10 * k, [amp] { g_engine.setParam(Param::BendCents, amp); });
+  }
+  if (wobbles > 0)
+    schedule(0.10 * (wobbles + 1),
+             [] { g_engine.setParam(Param::BendCents, 0.0f); });
+
+  printf("\n  >> ladowanie %s%s (%d flip%s) -> centrum %+.0f c\n",
+         dir < 0 ? "-" : "+", kRungNames[rung - 1], flips,
+         flips == 1 ? "" : "y", (double)g_sim.centerCents);
+}
+
+void fumble() {
+  const bool wasFlying = g_sim.inFlight;
+  g_sim.inFlight = false;
+  // the music falls: tape dive + the top layer is lost
+  g_engine.setParam(Param::BendCents, -350.0f);
+  g_looper.setRate(clampf(g_sim.rateBase * 0.3f, 0.1f, 4.0f));
+  g_looper.undoLayer();
+  schedule(0.35, [] {
+    g_engine.setParam(Param::BendCents, 0.0f);
+    g_looper.setRate(g_sim.rateBase);
+  });
+  printf("\n  >> FUSZERKA%s — wierzchnia warstwa poszla w podloge\n",
+         wasFlying ? " W LOCIE" : "");
 }
 
 int selftest() {
@@ -233,43 +374,63 @@ int main(int argc, char** argv) {
   termios raw = orig;
   raw.c_lflag &= ~(ICANON | ECHO);
   raw.c_cc[VMIN] = 0;
-  raw.c_cc[VTIME] = 1;  // read blocks for at most 100 ms
+  raw.c_cc[VTIME] = 0;  // fully non-blocking; the sim needs a fast tick
   tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 
   printf("grajek_live — engine at %d Hz, ~16 ms latency\n", kSr);
   printf("  grid: keyboard rows = instrument rows (bottom = lowest)\n");
-  printf("  TAB scale | ` timbre | BACKSPACE octave | SPACE latch (drones!)\n");
-  printf("  arrows <- -> bend | up/down filter | ENTER panic | ESC quit\n");
+  printf("  TAB scale | ` timbre | BACKSPACE octave | SHIFT+L latch (drony!)\n");
+  printf("  arrows <- -> bend | up/down filter | ENTER panic+re-center | ESC quit\n");
   printf("  LOOPER: SHIFT+R rec/close/overdub | SHIFT+P play/stop"
-         " | SHIFT+U undo | SHIFT+C clear (max %ds)\n"
-         "          SHIFT+[ / SHIFT+] loop volume down/up\n\n", kMaxLoopSec);
+         " | SHIFT+U undo | SHIFT+C clear\n"
+         "          SHIFT+[ / SHIFT+] loop volume (max %ds)\n", kMaxLoopSec);
+  printf("  RZUT:   SPACE = wyrzut ... SPACE = chwyt (czas lotu -> szczebel JI)\n"
+         "          strzalki W LOCIE = spin (-> w gore / <- w dol, wiecej = zawrot)\n"
+         "          SHIFT+X = fuszerka (muzyka upada, tracisz warstwe)\n\n");
 
   Ui ui;
   printStatus(ui);
   double lastStatusAt = nowSec();
 
   while (g_running) {
-    char c = 0;
-    const ssize_t n = read(STDIN_FILENO, &c, 1);
+    const int b = readByte(0);
 
-    if (n == 1) {
+    if (b >= 0) {
+      const char c = (char)b;
       KeyPos kp;
       if (c == 0x1B) {  // ESC alone, or an escape sequence
-        char c2 = 0, c3 = 0;
-        if (read(STDIN_FILENO, &c2, 1) != 1) {
-          g_running = 0;  // read timed out: bare ESC = quit
-        } else if (c2 == '[' && read(STDIN_FILENO, &c3, 1) == 1) {
-          switch (c3) {
-            case 'A': ui.cutoff = clampf(ui.cutoff * 1.15f, 200.0f, 12000.0f); break;
-            case 'B': ui.cutoff = clampf(ui.cutoff / 1.15f, 200.0f, 12000.0f); break;
-            case 'C': ui.bend = clampf(ui.bend + 25.0f, -300.0f, 300.0f); break;
-            case 'D': ui.bend = clampf(ui.bend - 25.0f, -300.0f, 300.0f); break;
-            default: break;
+        const int c2 = readByte(40);
+        if (c2 < 0) {
+          g_running = 0;  // nothing followed: bare ESC = quit
+        } else if (c2 == '[') {
+          const int c3 = readByte(40);
+          if (g_sim.inFlight) {
+            // in flight the arrows are SPIN, not bend/filter
+            if (c3 == 'C') g_sim.spin += 1;
+            if (c3 == 'D') g_sim.spin -= 1;
+          } else {
+            switch (c3) {
+              case 'A': ui.cutoff = clampf(ui.cutoff * 1.15f, 200.0f, 12000.0f); break;
+              case 'B': ui.cutoff = clampf(ui.cutoff / 1.15f, 200.0f, 12000.0f); break;
+              case 'C': ui.bend = clampf(ui.bend + 25.0f, -300.0f, 300.0f); break;
+              case 'D': ui.bend = clampf(ui.bend - 25.0f, -300.0f, 300.0f); break;
+              default: break;
+            }
+            g_engine.setParam(Param::FilterCutoffHz, ui.cutoff);
+            g_engine.setParam(Param::BendCents, ui.bend);
           }
-          g_engine.setParam(Param::FilterCutoffHz, ui.cutoff);
-          g_engine.setParam(Param::BendCents, ui.bend);
         }
         // any other sequence (Alt+key, F-keys): ignore, keep playing
+      } else if (c == ' ') {
+        if (!g_sim.inFlight) {
+          g_sim.inFlight = true;
+          g_sim.t0 = nowSec();
+          g_sim.spin = 0;
+        } else {
+          land(ui);
+        }
+      } else if (c == 'X') {
+        fumble();
       } else if (c == '\t') {
         ui.scale = (ui.scale + 1) % (int)ScaleId::Count;
         allOff();  // clean retuning
@@ -278,8 +439,8 @@ int main(int argc, char** argv) {
         g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
       } else if (c == 0x7F || c == 0x08) {  // backspace
         ui.octave = (ui.octave + 1) % 4;
-        g_engine.setParam(Param::BaseHz, kBaseOctaves[ui.octave]);
-      } else if (c == ' ') {
+        applyCenter(ui);
+      } else if (c == 'L') {
         ui.latch = !ui.latch;
       } else if (c == 'R') {
         g_looper.toggleRecord();
@@ -289,15 +450,22 @@ int main(int argc, char** argv) {
         g_looper.undoLayer();
       } else if (c == 'C') {
         g_looper.clear();
+        g_sim.rateBase = 1.0f;
+        g_looper.setRate(1.0f);
       } else if (c == '{') {
         g_looper.setPlaybackLevel(g_looper.playbackLevel() - 0.1f);
       } else if (c == '}') {
         g_looper.setPlaybackLevel(g_looper.playbackLevel() + 0.1f);
       } else if (c == '\r' || c == '\n') {
-        // panic silences the synth but leaves the loop running
+        // panic: silence + neutral pitch + back to home center; loop keeps going
         allOff();
         ui.bend = 0.0f;
+        g_sim.inFlight = false;
+        g_sim.centerCents = 0.0f;
+        g_sim.rateBase = 1.0f;
         g_engine.setParam(Param::BendCents, 0.0f);
+        g_looper.setRate(1.0f);
+        applyCenter(ui);
       } else if (keyToGrid(c, kp)) {
         const int id = kp.row * 14 + kp.col;
         const float cents = gridToCents((ScaleId)ui.scale, kp.col, kp.row);
@@ -323,9 +491,13 @@ int main(int argc, char** argv) {
       lastStatusAt = nowSec();
     }
 
-    // keep the loop position/state on screen while idling
-    if (g_looper.state() != Looper::State::Empty &&
-        nowSec() - lastStatusAt > 0.25) {
+    if (g_sim.inFlight) flightUpdate(ui);
+    runPending();
+
+    // keep the loop position / flight state on screen while idling
+    const bool busy =
+        g_sim.inFlight || g_looper.state() != Looper::State::Empty;
+    if (busy && nowSec() - lastStatusAt > (g_sim.inFlight ? 0.1 : 0.25)) {
       printStatus(ui);
       lastStatusAt = nowSec();
     }
@@ -338,6 +510,8 @@ int main(int argc, char** argv) {
         g_notes[id].on = false;
       }
     }
+
+    sleepMs(8);  // ~125 Hz tick: smooth flight, negligible input latency
   }
 
   allOff();
