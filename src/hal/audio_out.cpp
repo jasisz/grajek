@@ -28,6 +28,12 @@ int16_t* s_tape = nullptr;
 constexpr int kEchoRate = 16000;
 constexpr float kEchoSeconds = 3.0f;
 
+// Child-ear ceiling: a hard cap on the final output (~-5 dBFS after a soft
+// clip). This instrument is for a kid — no combination of layers may ever
+// get loud enough to hurt, on the speaker or on headphones. Kept digital
+// (the ES8311 DAC stays at 0 dB for SNR); raise cautiously if ever needed.
+constexpr float kEarCeiling = 0.55f;
+
 std::atomic<float> s_env{0.0f};
 
 bool es8311Write(uint8_t reg, uint8_t val) {
@@ -69,6 +75,10 @@ void audioTask(void*) {
     s_strings.process(fbuf, fbuf, hal::kAudioFrames);
     if (s_tape) s_echoBridge.process(fbuf, hal::kAudioFrames);
     s_reverb.process(fbuf, hal::kAudioFrames);
+
+    // final glue clip + the child-ear ceiling — nothing gets past this
+    for (int i = 0; i < hal::kAudioFrames; ++i)
+      fbuf[i] = ga::softClip(fbuf[i]) * kEarCeiling;
 
     ga::Engine::toInt16(fbuf, mono, hal::kAudioFrames);
     // The ES8311 DAC is mono but the I2S frame is stereo — duplicate the channel

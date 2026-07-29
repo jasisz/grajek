@@ -223,6 +223,10 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
   g_looper.process(samples, samples, frames);
   // Reverb last, so the loop and echo sit in the same room.
   g_reverb.process(samples, frames);
+  // final glue clip — stacked layers can sum hot; keep the edge soft
+  // (device adds a stricter child-ear ceiling on top of this)
+  for (int i = 0; i < frames; ++i)
+    samples[i] = softClip(samples[i]) * 0.85f;
   // session recorder taps the very end of the chain
   if (g_recOn.load(std::memory_order_relaxed) && g_recBuf) {
     uint32_t w = g_recIdx.load(std::memory_order_relaxed);
