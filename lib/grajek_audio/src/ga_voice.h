@@ -15,6 +15,9 @@ struct Timbre {
   // A bright attack whose upper partials melt away = bell/kalimba character.
   float pdecay[kPartials] = {0.0f, 0.0f, 0.0f, 0.0f};
   float detuneCents       = 0.3f;   // max random detune of partials > 1
+  // Breathing: scales the per-partial slow amplitude LFOs and detune drift —
+  // a held tone stays a process instead of a frozen sum of sines.
+  float shimmer           = 1.0f;
   float attack  = 0.05f;
   float decay   = 0.3f;
   float sustain = 0.85f;
@@ -52,9 +55,13 @@ class Voice {
   uint32_t phase_[Timbre::kPartials] = {0};
   float ratio_[Timbre::kPartials] = {1.0f};
   float gain_[Timbre::kPartials] = {0.0f};
-  float det_[Timbre::kPartials] = {0.0f};    // detune in cents
+  float det_[Timbre::kPartials] = {0.0f};    // detune in cents (wanders)
   float pdecay_[Timbre::kPartials] = {0.0f}; // per-partial decay tau (s)
   float pamp_[Timbre::kPartials] = {1.0f};   // per-partial decaying amplitude
+  float lfoPhase_[Timbre::kPartials] = {0.0f}; // breathing LFOs (turns)
+  float lfoInc_[Timbre::kPartials] = {0.0f};   // turns per sample
+  float shimmer_ = 1.0f;
+  float detLimit_ = 0.3f;
   float cents_ = 0.0f;
   float targetCents_ = 0.0f;
   float glideSec_ = 0.0f;

@@ -77,13 +77,26 @@ constexpr float kEchoSec = 4.0f;
 bool g_tampura = true;
 constexpr int32_t kTampuraRootId = 1000, kTampuraFifthId = 1001;
 
+// The breathing system ("weather"): a fast envelope follower on the dry
+// synth (published from the audio thread) + slow incommensurate tides,
+// consumed ONLY by the main loop — single-writer rule for every parameter.
+std::atomic<float> g_env{0.0f};
+struct Weather {
+  double start = 0.0;
+  double lastTick = 0.0;
+  int fifthVariant = 0;                 // 0 = 3/2, 1 = 7/4, 2 = root only
+  int32_t fifthId = kTampuraFifthId;    // alternates so variants crossfade
+};
+Weather g_weather;
+
 void tampuraApply() {
   if (g_tampura) {
     g_engine.noteOn(kTampuraRootId, 0.0f, 0.22f);
-    g_engine.noteOn(kTampuraFifthId, 702.0f, 0.16f);
+    g_weather.fifthVariant = 0;
+    g_engine.noteOn(g_weather.fifthId, 702.0f, 0.16f);
   } else {
     g_engine.noteOff(kTampuraRootId);
-    g_engine.noteOff(kTampuraFifthId);
+    g_engine.noteOff(g_weather.fifthId);
   }
 }
 
@@ -96,6 +109,14 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
   const int frames = (int)(buf->mAudioDataBytesCapacity / sizeof(float));
   float* samples = (float*)buf->mAudioData;
   g_engine.process(samples, frames);
+  // Envelope follower on the dry synth (attack ~5 ms, release ~2 s) — the
+  // audio thread only PUBLISHES; all modulation happens in the main loop.
+  static float envLocal = 0.0f;
+  for (int i = 0; i < frames; ++i) {
+    const float a = fabsf(samples[i]);
+    envLocal += (a > envLocal ? 0.004f : 0.00001f) * (a - envLocal);
+  }
+  g_env.store(envLocal, std::memory_order_relaxed);
   // Generosity layer: everything played joins a fading ambient memory.
   g_echo.process(samples, samples, frames);
   // The manual looper records synth+ambience and adds loop playback on top.
@@ -181,7 +202,8 @@ struct Ui {
   int preset = 3;  // CHIME — the "pretty by itself" default
   int octave = 2;  // 220 Hz
   bool latch = false;
-  float cutoff = 6000.0f;
+  float cutoff = 6000.0f;   // player's base — the weather drifts around it
+  float wetBase = 0.35f;    // player's reverb base (SHIFT+V), same deal
   float bend = 0.0f;
 };
 
@@ -220,6 +242,52 @@ void runPending() {
 void applyCenter(const Ui& ui) {
   g_engine.setParam(Param::BaseHz, kBaseOctaves[ui.octave] *
                                        exp2f(g_sim.centerCents / 1200.0f));
+}
+
+// ~30 Hz from the main loop: playing keeps the path clear; going quiet for
+// a few seconds lets echo and reverb swell into the space; three
+// incommensurate tides (90/210/330 s) drift the macro state so the total
+// never repeats; the tampura fifth gets re-voted every few minutes.
+// Ranges are deliberately narrow — bad weather must not exist.
+void weatherTick(const Ui& ui) {
+  const double now = nowSec();
+  if (now - g_weather.lastTick < 0.033) return;
+  g_weather.lastTick = now;
+  const double t = now - g_weather.start;
+  const float t1 = sinf((float)(kTau * t / 90.0));
+  const float t2 = sinf((float)(kTau * t / 210.0));
+  const float t3 = sinf((float)(kTau * t / 330.0));
+  const float env = g_env.load(std::memory_order_relaxed);
+  const float breathe = clampf(1.0f - (env - 0.04f) / 0.18f, 0.0f, 1.0f);
+
+  g_echo.setLevel(clampf(0.45f + 0.25f * breathe + 0.05f * t1, 0.30f, 0.80f));
+  g_echo.setFeedback(
+      clampf(0.52f + 0.10f * breathe + 0.05f * t2, 0.40f, 0.68f));
+  if (ui.wetBase > 0.0f)
+    g_reverb.setWet(
+        clampf(ui.wetBase * (0.85f + 0.35f * breathe) + 0.03f * t3,
+               0.10f, 0.60f));
+  // a touch darker in silence, tide-drifted around the player's base
+  const float ratio = (0.90f + 0.18f * t3) * (1.0f - 0.15f * breathe);
+  g_engine.setParam(Param::FilterCutoffHz,
+                    clampf(ui.cutoff * ratio, 300.0f, 12000.0f));
+
+  // tampura voting with hysteresis; alternating ids = ADSR crossfade
+  int want = g_weather.fifthVariant;
+  if (t2 > 0.7f) want = 1;
+  else if (t2 < -0.7f) want = 2;
+  else if (t2 > -0.5f && t2 < 0.5f) want = 0;
+  if (want != g_weather.fifthVariant && g_tampura) {
+    g_engine.noteOff(g_weather.fifthId);
+    g_weather.fifthVariant = want;
+    if (want != 2) {
+      g_weather.fifthId = (g_weather.fifthId == kTampuraFifthId)
+                              ? kTampuraFifthId + 1
+                              : kTampuraFifthId;
+      g_engine.noteOn(g_weather.fifthId, want == 0 ? 702.0f : 968.8f,
+                      want == 0 ? 0.16f : 0.14f);
+    }
+  }
 }
 
 const char* loopStateName(Looper::State s) {
@@ -437,6 +505,7 @@ int main(int argc, char** argv) {
          "          SHIFT+X = fuszerka (muzyka upada, tracisz warstwe)\n\n");
 
   Ui ui;
+  g_weather.start = nowSec();
   tampuraApply();
   printStatus(ui);
   double lastStatusAt = nowSec();
@@ -459,13 +528,14 @@ int main(int argc, char** argv) {
             if (c3 == 'D') g_sim.spin -= 1;
           } else {
             switch (c3) {
+              // cutoff only updates the player's base — the weather tick is
+              // the single writer of the actual engine parameter
               case 'A': ui.cutoff = clampf(ui.cutoff * 1.15f, 200.0f, 12000.0f); break;
               case 'B': ui.cutoff = clampf(ui.cutoff / 1.15f, 200.0f, 12000.0f); break;
               case 'C': ui.bend = clampf(ui.bend + 25.0f, -300.0f, 300.0f); break;
               case 'D': ui.bend = clampf(ui.bend - 25.0f, -300.0f, 300.0f); break;
               default: break;
             }
-            g_engine.setParam(Param::FilterCutoffHz, ui.cutoff);
             g_engine.setParam(Param::BendCents, ui.bend);
           }
         }
@@ -498,10 +568,12 @@ int main(int argc, char** argv) {
         g_tampura = !g_tampura;
         tampuraApply();
       } else if (c == 'V') {
-        // cycle the room: dry -> subtle -> default -> cathedral
-        const float w = g_reverb.wet();
-        g_reverb.setWet(w <= 0.0f ? 0.2f : (w <= 0.2f ? 0.35f
-                                          : (w <= 0.35f ? 0.55f : 0.0f)));
+        // cycle the room base: dry -> subtle -> default -> cathedral
+        // (the weather breathes around this base)
+        ui.wetBase = ui.wetBase <= 0.0f ? 0.2f
+                     : (ui.wetBase <= 0.2f ? 0.35f
+                        : (ui.wetBase <= 0.35f ? 0.55f : 0.0f));
+        if (ui.wetBase <= 0.0f) g_reverb.setWet(0.0f);
       } else if (c == 'R') {
         g_looper.toggleRecord();
       } else if (c == 'P') {
@@ -566,6 +638,7 @@ int main(int argc, char** argv) {
 
     if (g_sim.inFlight) flightUpdate(ui);
     runPending();
+    weatherTick(ui);
 
     // keep the loop position / flight state on screen while idling
     const bool busy =

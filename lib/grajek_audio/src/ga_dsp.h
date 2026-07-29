@@ -39,6 +39,15 @@ inline float sineAtTab(const float* tab, uint32_t phase) {
 
 inline float sineAt(uint32_t phase) { return sineAtTab(sineTable().t, phase); }
 
+// Cheap sine for LFOs: phase in turns [0,1), parabola approximation (~6%
+// error — irrelevant below 1 Hz). No tables, no libm on the hot path.
+inline float sinTurns(float t) {
+  t -= (float)(int)t;
+  if (t < 0.0f) t += 1.0f;
+  return t < 0.5f ? 16.0f * t * (0.5f - t)
+                  : -16.0f * (t - 0.5f) * (1.0f - t);
+}
+
 // Cubic soft clip — gentle saturation instead of a hard edge.
 inline float softClip(float x) {
   if (x >  1.5f) return  1.0f;

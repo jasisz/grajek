@@ -10,18 +10,21 @@ Timbre timbrePreset(int idx) {
       t.ratio[0] = 1; t.ratio[1] = 2; t.ratio[2] = 3; t.ratio[3] = 4;
       t.gain[0] = 0.9f; t.gain[1] = 0.12f; t.gain[2] = 0.05f; t.gain[3] = 0.02f;
       t.detuneCents = 0.3f;
+      t.shimmer = 0.7f;
       t.attack = 0.05f; t.decay = 0.3f; t.sustain = 0.85f; t.release = 0.6f;
       break;
     case 1:  // DRONE — octaves, pronounced beating, bowed-string envelope
       t.ratio[0] = 1; t.ratio[1] = 2; t.ratio[2] = 4; t.ratio[3] = 8;
       t.gain[0] = 0.7f; t.gain[1] = 0.35f; t.gain[2] = 0.18f; t.gain[3] = 0.08f;
       t.detuneCents = 0.9f;
+      t.shimmer = 1.5f;  // drones live off the breathing
       t.attack = 0.8f; t.decay = 0.5f; t.sustain = 0.9f; t.release = 2.0f;
       break;
     case 2:  // REED — odd harmonics, clarinet-like
       t.ratio[0] = 1; t.ratio[1] = 3; t.ratio[2] = 5; t.ratio[3] = 7;
       t.gain[0] = 0.8f; t.gain[1] = 0.25f; t.gain[2] = 0.12f; t.gain[3] = 0.06f;
       t.detuneCents = 0.2f;
+      t.shimmer = 0.5f;
       t.attack = 0.02f; t.decay = 0.2f; t.sustain = 0.8f; t.release = 0.3f;
       break;
     case 3:  // CHIME — bright music-box ping, uppers melt into a pure tone
@@ -30,6 +33,7 @@ Timbre timbrePreset(int idx) {
       t.pdecay[0] = 0.0f; t.pdecay[1] = 1.2f; t.pdecay[2] = 0.4f;
       t.pdecay[3] = 0.2f;
       t.detuneCents = 0.25f;
+      t.shimmer = 0.9f;
       t.attack = 0.003f; t.decay = 0.5f; t.sustain = 0.5f; t.release = 2.8f;
       break;
   }
@@ -72,7 +76,13 @@ void Voice::noteOn(int32_t id, float cents, float vel, const Timbre& t,
     det_[k] = (k == 0) ? 0.0f : rnd11() * t.detuneCents;
     pdecay_[k] = t.pdecay[k];
     pamp_[k] = 1.0f;
+    // breathing LFOs: each partial gets its own ultra-slow rate (0.03-0.15
+    // Hz) and phase — no two notes, and no two partials, ever breathe alike
+    lfoPhase_[k] = (float)(rng() >> 8) * (1.0f / 16777216.0f);
+    lfoInc_[k] = (0.03f + 0.12f * (float)(rng() >> 8) * (1.0f / 16777216.0f)) / sr_;
   }
+  shimmer_ = t.shimmer;
+  detLimit_ = t.detuneCents;
   env_.setTimes(t.attack, t.decay, t.sustain, t.release);
   targetCents_ = cents;
   glideSec_ = glideSec;
@@ -102,14 +112,27 @@ void Voice::render(float* out, int n, float baseHz, float bendRatio) {
       g[k] = 0.0f;
       inc[k] = 0;
     } else {
-      g[k] = gain_[k] * pamp_[k];
+      // breathing: slow independent amplitude wobble per partial —
+      // fundamental barely, uppers more; a held tone never sits still
+      const float depth = shimmer_ * (k == 0 ? 0.05f : 0.14f + 0.06f * (float)k);
+      const float breathe = 1.0f + depth * sinTurns(lfoPhase_[k]);
+      g[k] = gain_[k] * pamp_[k] * breathe;
       inc[k] = (uint32_t)(ph * 4294967296.0);
     }
   }
-  // per-partial melt (block granularity is plenty at 64-128 samples)
-  for (int k = 0; k < Timbre::kPartials; ++k)
+  // block-rate evolution: melt, LFO phases, wandering detune
+  for (int k = 0; k < Timbre::kPartials; ++k) {
     if (pdecay_[k] > 0.0f)
       pamp_[k] *= expf(-(float)n / (sr_ * pdecay_[k]));
+    lfoPhase_[k] += lfoInc_[k] * (float)n;
+    if (lfoPhase_[k] >= 1.0f) lfoPhase_[k] -= 1.0f;
+    if (k > 0 && detLimit_ > 0.0f) {
+      // detune drifts, so the beating tempo itself slowly evolves
+      det_[k] += rnd11() * 0.012f;
+      if (det_[k] > detLimit_) det_[k] = 2.0f * detLimit_ - det_[k];
+      if (det_[k] < -detLimit_) det_[k] = -2.0f * detLimit_ - det_[k];
+    }
+  }
 
   const float* tab = sineTable().t;  // hoisted out of the sample loop
   for (int i = 0; i < n; ++i) {
