@@ -48,6 +48,7 @@
 #include <functional>
 #include <vector>
 
+#include "ga_echo.h"
 #include "ga_engine.h"
 #include "ga_looper.h"
 #include "ga_scales.h"
@@ -62,7 +63,9 @@ constexpr int kNumBufs = 3;         // ~16 ms total output latency
 
 Engine g_engine;
 Looper g_looper;
+EchoTape g_echo;  // always-on ambient memory: play anything, it comes back
 constexpr int kMaxLoopSec = 60;
+constexpr float kEchoSec = 4.0f;
 
 // Ctrl+C must go through the cleanup path (restore termios, stop the queue),
 // not kill the process mid-raw-mode.
@@ -73,7 +76,9 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
   const int frames = (int)(buf->mAudioDataBytesCapacity / sizeof(float));
   float* samples = (float*)buf->mAudioData;
   g_engine.process(samples, frames);
-  // The looper records the dry synth and adds loop playback on top.
+  // Generosity layer: everything played joins a fading ambient memory.
+  g_echo.process(samples, samples, frames);
+  // The manual looper records synth+ambience and adds loop playback on top.
   g_looper.process(samples, samples, frames);
   buf->mAudioDataByteSize = (UInt32)(frames * sizeof(float));
   AudioQueueEnqueueBuffer(q, buf, 0, nullptr);
@@ -222,6 +227,7 @@ void printStatus(const Ui& ui) {
            (float)g_looper.lengthFrames() / kSr,
            g_looper.playbackLevel() * 100.0f);
   }
+  if (!g_echo.enabled()) printf(" echo:OFF");
   if (g_sim.inFlight) {
     printf("  LOT %.2fs spin:%+d", nowSec() - g_sim.t0, g_sim.spin);
   } else if (g_sim.centerCents != 0.0f) {
@@ -308,15 +314,16 @@ void land(Ui& ui) {
 void fumble() {
   const bool wasFlying = g_sim.inFlight;
   g_sim.inFlight = false;
-  // the music falls: tape dive + the top layer is lost
+  // a comic stumble — the tape trips and gets back up; NOTHING is lost.
+  // (An earlier version dropped the top layer here: punishing the player
+  // fights the whole point of the instrument — every gesture should be safe.)
   g_engine.setParam(Param::BendCents, -350.0f);
   g_looper.setRate(clampf(g_sim.rateBase * 0.3f, 0.1f, 4.0f));
-  g_looper.undoLayer();
   schedule(0.35, [] {
     g_engine.setParam(Param::BendCents, 0.0f);
     g_looper.setRate(g_sim.rateBase);
   });
-  printf("\n  >> FUSZERKA%s — wierzchnia warstwa poszla w podloge\n",
+  printf("\n  >> FUSZERKA%s — taśma sie potkna, muzyka przezywa\n",
          wasFlying ? " W LOCIE" : "");
 }
 
@@ -355,6 +362,11 @@ int main(int argc, char** argv) {
                 (uint32_t)mixBuf.size());
   g_looper.setPlaybackLevel(0.8f);  // leave headroom to play over the loop
 
+  static std::vector<int16_t> echoBuf((size_t)(kEchoSec * kSr));
+  g_echo.init(echoBuf.data(), (uint32_t)echoBuf.size());
+  g_echo.setFeedback(0.55f);  // each return ~5 dB quieter, ~4 audible repeats
+  g_echo.setLevel(0.5f);
+
   if (argc > 1 && strcmp(argv[1], "--selftest") == 0) return selftest();
 
   if (!isatty(STDIN_FILENO)) {
@@ -382,6 +394,9 @@ int main(int argc, char** argv) {
   tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 
   printf("grajek_live — engine at %d Hz, ~16 ms latency\n", kSr);
+  printf("  ECHO zawsze gra: co zagrasz, wraca po %.0f s coraz ciszej —\n"
+         "  klikaj pojedyncze nuty i sluchaj, jak sklada sie pejzaz"
+         " (SHIFT+E wylacza)\n", (double)kEchoSec);
   printf("  grid: keyboard rows = instrument rows (bottom = lowest)\n");
   printf("  TAB scale | ` timbre | BACKSPACE octave | SHIFT+L latch (drony!)\n");
   printf("  arrows <- -> bend | up/down filter | ENTER panic+re-center | ESC quit\n");
@@ -446,6 +461,8 @@ int main(int argc, char** argv) {
         applyCenter(ui);
       } else if (c == 'L') {
         ui.latch = !ui.latch;
+      } else if (c == 'E') {
+        g_echo.setEnabled(!g_echo.enabled());
       } else if (c == 'R') {
         g_looper.toggleRecord();
       } else if (c == 'P') {
@@ -453,9 +470,10 @@ int main(int argc, char** argv) {
       } else if (c == 'U') {
         g_looper.undoLayer();
       } else if (c == 'C') {
-        // full reset to zero: loop gone, flight cancelled, home center,
-        // tape at 1x, bend neutral — nothing survives a clear
+        // full reset to zero: loop gone, echo tape wiped, flight cancelled,
+        // home center, tape at 1x, bend neutral — nothing survives a clear
         g_looper.clear();
+        g_echo.clearTape();
         g_pending.clear();
         g_sim.inFlight = false;
         g_sim.centerCents = 0.0f;
