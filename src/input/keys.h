@@ -27,4 +27,8 @@ bool keyHeld(int col, int row);
 // BtnGO (G0) with debounce; true exactly once per press.
 bool goPressed();
 
+// How long BtnGO has been held, in ms (0 when up) — the parent gesture
+// (long-press in the menu) cycles the age tier.
+uint32_t goHeldMs();
+
 }  // namespace input

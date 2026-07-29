@@ -64,4 +64,8 @@ bool goPressed() {
   return false;
 }
 
+uint32_t goHeldMs() {
+  return s_goLast ? millis() - s_goChangedAt : 0;
+}
+
 }  // namespace input

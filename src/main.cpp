@@ -6,6 +6,7 @@
 // The two sides talk exclusively through the engine's lock-free event queue.
 #include <M5Cardputer.h>
 
+#include "age.h"
 #include "ambient.h"
 #include "ga_engine.h"
 #include "hal/audio_out.h"
@@ -45,7 +46,10 @@ void drawMenu() {
     canvas.drawString(line, 16, 36 + i * 16);
   }
   canvas.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  canvas.drawString("press 1-4 to pick a mode", 8, 108);
+  char ageLine[48];
+  snprintf(ageLine, sizeof ageLine, "press 1-4 to pick a mode | latka: %s",
+           age::label(age::tier()));
+  canvas.drawString(ageLine, 8, 108);
   if (!audioOk) {
     canvas.setTextColor(TFT_RED, TFT_BLACK);
     canvas.drawString("AUDIO INIT FAILED - check serial log", 8, 122);
@@ -77,6 +81,7 @@ void setup() {
   M5Cardputer.begin(cfg, true);
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setBrightness(160);
+  age::load();
 
   canvas.setPsram(false);  // StampS3A has no PSRAM — allocate in internal RAM
   canvas.setColorDepth(8);  // 8-bit color frees ~32 KB for the echo tape
@@ -120,6 +125,18 @@ void loop() {
         enterMode(ctx, ev[i].col - 1);
         break;
       }
+    }
+    // parent gesture: long-press BtnGO in the menu cycles the age tier —
+    // deliberate, invisible to a toddler, saved to NVS immediately
+    static bool ageCycled = false;
+    if (input::goHeldMs() > 1200) {
+      if (!ageCycled) {
+        age::cycle();
+        ageCycled = true;
+        menuDirty = true;
+      }
+    } else if (input::goHeldMs() == 0) {
+      ageCycled = false;
     }
   }
 

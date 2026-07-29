@@ -81,6 +81,12 @@ constexpr float kReichDrift = 1.0025f;
 void setLoopRate(float r) { g_looper.setRate(r * kReichDrift); }
 
 bool g_harmony = false;  // SHIFT+H: a quiet harmonic shadow one row above
+
+// The age dial (SHIFT+A) — the instrument grows with the child:
+// 0 = MALUCH (2-3): pentatonic chime, no switches; 1 = SREDNIAK (4-6):
+// only the happy scales; 2 = DUZY (7+): everything. Persisted in the soul.
+int g_age = 2;
+const char* kAgeNames[3] = {"2-3", "4-6", "7+"};
 // the echo's raw tape, shared with the FREEZE capture
 int16_t* g_echoStorage = nullptr;
 uint32_t g_echoFrames = 0;
@@ -609,6 +615,7 @@ void printStatus(const Ui& ui) {
            (float)g_looper.lengthFrames() / kSr,
            g_looper.playbackLevel() * 100.0f);
   }
+  if (g_age != 2) printf(" wiek:%s", kAgeNames[g_age]);
   if (g_pulse.ticking)
     printf(" puls:%d", (int)(60.0 / g_pulse.period + 0.5));
   if (g_harmony) printf(" harm:ON");
@@ -654,7 +661,7 @@ void soulSave(const Ui& ui) {
                      2 * GhostGarden::kCap) % GhostGarden::kCap;
     fprintf(f, " %.2f", (double)g_garden.ring[idx].cents);
   }
-  fprintf(f, "\n");
+  fprintf(f, "\nage %d\n", g_age);
   fclose(f);
 }
 
@@ -693,6 +700,8 @@ bool soulLoad(Ui& ui) {
       g_garden.count = m;
       g_garden.head = m % GhostGarden::kCap;
     }
+    int a = 2;
+    if (fscanf(f, " age %d", &a) == 1 && a >= 0 && a <= 2) g_age = a;
     ok = true;
   }
   fclose(f);
@@ -880,6 +889,8 @@ int main(int argc, char** argv) {
   printf("  PULS:   graj rowno kilka nut, a dolaczy serce grajace ARPEGGIO\n"
          "          TWOJEGO TLA w twoim tempie; plynie za toba (tez na\n"
          "          polnuty/osemki), a gdy przestajesz — samo puszcza\n");
+  printf("  WIEK:   SHIFT+A cykluje 2-3 / 4-6 / 7+ — pudelko rosnie z\n"
+         "          dzieckiem (maluch: pentatonika i zero pokretel)\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
@@ -959,13 +970,36 @@ int main(int argc, char** argv) {
       } else if (c == 'X') {
         fumble();
       } else if (c == '\t') {
-        ui.scale = (ui.scale + 1) % (int)ScaleId::Count;
-        allOff();  // clean retuning
-        backgroundApply();
+        if (g_age == 0) {
+          // MALUCH: the scale is not a knob
+        } else if (g_age == 1) {
+          ui.scale = ui.scale == (int)ScaleId::PENTA ? (int)ScaleId::MAJOR
+                                                     : (int)ScaleId::PENTA;
+          allOff();
+          backgroundApply();
+        } else {
+          ui.scale = (ui.scale + 1) % (int)ScaleId::Count;
+          allOff();  // clean retuning
+          backgroundApply();
+        }
       } else if (c == '`') {
-        ui.preset = (ui.preset + 1) % kNumTimbrePresets;
-        g_uiPreset = ui.preset;
-        g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
+        if (g_age > 0) {
+          ui.preset = (ui.preset + 1) % kNumTimbrePresets;
+          g_uiPreset = ui.preset;
+          g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
+        }
+      } else if (c == 'A') {
+        g_age = (g_age + 1) % 3;
+        if (g_age == 0) {  // the toddler tier locks the perfect world in
+          ui.scale = (int)ScaleId::PENTA;
+          ui.preset = 3;
+          g_uiPreset = 3;
+          g_engine.setParam(Param::TimbrePreset, 3.0f);
+          g_pickMode = false;
+        } else if (g_age == 1 && ui.scale != (int)ScaleId::PENTA &&
+                   ui.scale != (int)ScaleId::MAJOR) {
+          ui.scale = (int)ScaleId::PENTA;
+        }
       } else if (c == 0x7F || c == 0x08) {  // backspace
         ui.octave = (ui.octave + 1) % 4;
         applyCenter(ui);
@@ -979,12 +1013,16 @@ int main(int argc, char** argv) {
         g_tampura = !g_tampura;
         backgroundApply();
       } else if (c == 'D') {
-        g_pickMode = !g_pickMode;
-        if (g_pickMode)
-          printf("\n  >> WYBOR TLA: klikaj nuty siatki (toggle, max 4);"
-                 " SHIFT+D konczy\n");
-        else
-          printf("\n  >> tlo ustawione (%d nut)\n", g_bgCount);
+        if (g_age == 0) {
+          // MALUCH: no pick mode — the background is not a knob either
+        } else {
+          g_pickMode = !g_pickMode;
+          if (g_pickMode)
+            printf("\n  >> WYBOR TLA: klikaj nuty siatki (toggle, max 4);"
+                   " SHIFT+D konczy\n");
+          else
+            printf("\n  >> tlo ustawione (%d nut)\n", g_bgCount);
+        }
       } else if (c == 'S') {
         g_strings.setEnabled(!g_strings.enabled());
       } else if (c == 'V') {

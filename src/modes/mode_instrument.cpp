@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "../age.h"
 #include "../ambient.h"
 #include "../hal/audio_out.h"
 
@@ -35,6 +36,14 @@ void ModeInstrument::applyRoot(ModeCtx& ctx) {
 }
 
 void ModeInstrument::enter(ModeCtx& ctx) {
+  if (age::tier() == age::Maluch) {
+    // the toddler tier is a fixed, perfect world: pentatonic chime, no knobs
+    scale_ = ScaleId::PENTA;
+    preset_ = 3;  // CHIME
+  } else if (age::tier() == age::Sredniak &&
+             scale_ != ScaleId::PENTA && scale_ != ScaleId::MAJOR) {
+    scale_ = ScaleId::PENTA;  // only the happy scales at this age
+  }
   ctx.engine.setParam(Param::TimbrePreset, (float)preset_);
   ambient::setPreset(preset_);
   applyRoot(ctx);
@@ -58,6 +67,25 @@ void ModeInstrument::exit(ModeCtx& ctx) {
 void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
   if (down) ambient::notePresence();
 
+  if (age::tier() == age::Maluch) {
+    // MALUCH: all 56 keys play pentatonic — the control column too; there
+    // is nothing to switch, nothing to get lost in, no wrong key anywhere
+    const int id = row * 14 + col;
+    const uint64_t m = (uint64_t)1 << id;
+    if (down) {
+      const int gridRow = 3 - row;
+      const float cents = gridToCents(ScaleId::PENTA, col, gridRow);
+      ctx.engine.noteOn(id, cents, 0.9f);
+      ambient::gardenPush(cents);
+      held_ |= m;
+    } else {
+      ctx.engine.noteOff(id);
+      held_ &= ~m;
+    }
+    markDirty();
+    return;
+  }
+
   if (col == 0) {  // control column
     if (row == 3) {
       // TAP = octave cycle, HOLD + grid = background pick
@@ -77,7 +105,12 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
     if (!down) return;
     switch (row) {
       case 0:
-        scale_ = (ScaleId)(((int)scale_ + 1) % (int)ScaleId::Count);
+        if (age::tier() == age::Sredniak) {
+          // only the happy scales at this age
+          scale_ = scale_ == ScaleId::PENTA ? ScaleId::MAJOR : ScaleId::PENTA;
+        } else {
+          scale_ = (ScaleId)(((int)scale_ + 1) % (int)ScaleId::Count);
+        }
         ctx.engine.allNotesOff();  // clean retuning
         ambient::backgroundSetEnabled(ambient::backgroundEnabled());
         break;
@@ -229,9 +262,10 @@ void ModeInstrument::draw(ModeCtx& ctx) {
   g.setTextColor(TFT_WHITE, TFT_BLACK);
 
   char buf[64];
-  snprintf(buf, sizeof buf, "%s | %s | %d Hz | ctr %+d c",
+  snprintf(buf, sizeof buf, "%s | %s | %d Hz | ctr %+d c | %s",
            scaleInfo(scale_).name, kPresetNames[preset_],
-           (int)kBaseOctaves[octave_], (int)centerCents_);
+           (int)kBaseOctaves[octave_], (int)centerCents_,
+           age::label(age::tier()));
   g.drawString(buf, 4, 3);
   g.drawFastHLine(0, 14, 240, TFT_DARKGREY);
 
