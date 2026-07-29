@@ -27,13 +27,21 @@ class Looper {
  public:
   enum class State : uint8_t { Empty, RecordFirst, Play, Overdub, Stopped };
 
-  // Buffers must each hold maxFrames samples. `undo` may be nullptr — then
-  // undoLayer() is unavailable (saves a buffer on small devices).
-  void init(int16_t* mix, int16_t* layer, int16_t* undo, uint32_t maxFrames);
+  // mix and layer must each hold maxFrames samples. undoStack holds
+  // undoDepth slots of maxFrames each (a ring of pre-commit snapshots =
+  // multi-level undo); depth 0 / nullptr disables undo entirely.
+  void init(int16_t* mix, int16_t* layer, int16_t* undoStack, int undoDepth,
+            uint32_t maxFrames);
+  // Backward-compatible single-buffer variant (one undo level).
+  void init(int16_t* mix, int16_t* layer, int16_t* undo, uint32_t maxFrames) {
+    init(mix, layer, undo, undo ? 1 : 0, maxFrames);
+  }
 
   // --- control thread ---
   void toggleRecord() { cmds_.fetch_or(kCmdRecord, std::memory_order_release); }
   void togglePlay()   { cmds_.fetch_or(kCmdPlay,   std::memory_order_release); }
+  // During an overdub: cancels the current take ("wait, not that").
+  // Otherwise: removes the last committed layer (up to undoDepth levels).
   void undoLayer()    { cmds_.fetch_or(kCmdUndo,   std::memory_order_release); }
   void clear()        { cmds_.fetch_or(kCmdClear,  std::memory_order_release); }
 
@@ -68,7 +76,8 @@ class Looper {
   uint32_t lengthFrames() const { return length_.load(std::memory_order_relaxed); }
   uint32_t positionFrames() const { return pos_.load(std::memory_order_relaxed); }
   int layerCount() const { return layers_.load(std::memory_order_relaxed); }
-  bool undoAvailable() const { return undoOk_.load(std::memory_order_relaxed); }
+  int undoCount() const { return undoCount_.load(std::memory_order_relaxed); }
+  bool undoAvailable() const { return undoCount() > 0; }
 
  private:
   static constexpr uint32_t kCmdRecord = 1, kCmdPlay = 2, kCmdUndo = 4,
@@ -91,7 +100,9 @@ class Looper {
 
   int16_t* mix_ = nullptr;
   int16_t* layer_ = nullptr;
-  int16_t* undo_ = nullptr;
+  int16_t* undo_ = nullptr;  // base of the snapshot ring (undoDepth_ slots)
+  int undoDepth_ = 0;
+  int undoHead_ = 0;  // audio-thread only: next slot to write
   uint32_t max_ = 0;
 
   std::atomic<uint32_t> cmds_{0};
@@ -103,7 +114,7 @@ class Looper {
   std::atomic<uint32_t> length_{0};
   std::atomic<uint32_t> pos_{0};
   std::atomic<int> layers_{0};
-  std::atomic<bool> undoOk_{false};
+  std::atomic<int> undoCount_{0};
 };
 
 }  // namespace ga

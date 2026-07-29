@@ -216,8 +216,9 @@ void printStatus(const Ui& ui) {
   } else if (ls == Looper::State::RecordFirst) {
     printf(" loop:REC %.1fs", (float)g_looper.lengthFrames() / kSr);
   } else {
-    printf(" loop:%s %dlyr %.1f/%.1fs vol:%.0f%%", loopStateName(ls),
-           g_looper.layerCount(), (float)g_looper.positionFrames() / kSr,
+    printf(" loop:%s %dlyr undo:%d %.1f/%.1fs vol:%.0f%%", loopStateName(ls),
+           g_looper.layerCount(), g_looper.undoCount(),
+           (float)g_looper.positionFrames() / kSr,
            (float)g_looper.lengthFrames() / kSr,
            g_looper.playbackLevel() * 100.0f);
   }
@@ -344,10 +345,13 @@ int main(int argc, char** argv) {
   g_engine.setParam(Param::FilterCutoffHz, 6000.0f);
 
   // Loop storage lives for the whole run; allocated before audio starts.
+  // 8 undo levels: the host has RAM to spare, and the fumble gesture eats
+  // one level per crash — a single level felt broken in play-testing.
+  constexpr int kUndoDepth = 8;
   static std::vector<int16_t> mixBuf((size_t)kMaxLoopSec * kSr);
   static std::vector<int16_t> layerBuf((size_t)kMaxLoopSec * kSr);
-  static std::vector<int16_t> undoBuf((size_t)kMaxLoopSec * kSr);
-  g_looper.init(mixBuf.data(), layerBuf.data(), undoBuf.data(),
+  static std::vector<int16_t> undoBuf((size_t)kUndoDepth * kMaxLoopSec * kSr);
+  g_looper.init(mixBuf.data(), layerBuf.data(), undoBuf.data(), kUndoDepth,
                 (uint32_t)mixBuf.size());
   g_looper.setPlaybackLevel(0.8f);  // leave headroom to play over the loop
 
