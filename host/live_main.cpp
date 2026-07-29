@@ -55,6 +55,7 @@
 #include "ga_looper.h"
 #include "ga_reverb.h"
 #include "ga_scales.h"
+#include "ga_strings.h"
 #include "wav_writer.h"
 
 using namespace ga;
@@ -75,11 +76,20 @@ constexpr float kEchoSec = 4.0f;
 int16_t* g_echoStorage = nullptr;
 uint32_t g_echoFrames = 0;
 
-// Tampura: a quiet 1/1 + 3/2 pedal under everything — random notes over a
-// root drone sound intentional. Follows toss modulations automatically
-// (voices track BaseHz live).
+// The background (tampura): a quiet pedal under everything — random notes
+// over a drone sound intentional. Default is 1/1 + 3/2; the player can PICK
+// their own chord (up to 4 notes) in pick mode (SHIFT+D here; on the device
+// this will be hold-a-modifier + press grid keys). Follows toss modulations
+// automatically (voices track BaseHz live).
 bool g_tampura = true;
-constexpr int32_t kTampuraRootId = 1000, kTampuraFifthId = 1001;
+bool g_pickMode = false;
+struct BgNote { float cents; int32_t id; };
+BgNote g_bg[4] = {{0.0f, 1000}, {702.0f, 1001}, {0.0f, -1}, {0.0f, -1}};
+int g_bgCount = 2;
+bool g_bgCustom = false;   // a hand-picked background silences the weather vote
+int32_t g_bgNextId = 2;    // rotates through ids 1000..1015
+
+SympatheticStrings g_strings;  // JI halo around everything (SHIFT+S toggles)
 
 // The breathing system ("weather"): a fast envelope follower on the dry
 // synth (published from the audio thread) + slow incommensurate tides,
@@ -88,8 +98,7 @@ std::atomic<float> g_env{0.0f};
 struct Weather {
   double start = 0.0;
   double lastTick = 0.0;
-  int fifthVariant = 0;                 // 0 = 3/2, 1 = 7/4, 2 = root only
-  int32_t fifthId = kTampuraFifthId;    // alternates so variants crossfade
+  int fifthVariant = 0;  // 0 = 3/2, 1 = 7/4 (default background only)
 };
 Weather g_weather;
 
@@ -116,15 +125,38 @@ std::atomic<bool> g_recOn{false};
 std::atomic<uint32_t> g_recIdx{0};
 std::vector<int16_t>* g_recBuf = nullptr;
 
-void tampuraApply() {
-  if (g_tampura) {
-    g_engine.noteOn(kTampuraRootId, 0.0f, 0.22f);
-    g_weather.fifthVariant = 0;
-    g_engine.noteOn(g_weather.fifthId, 702.0f, 0.16f);
-  } else {
-    g_engine.noteOff(kTampuraRootId);
-    g_engine.noteOff(g_weather.fifthId);
+void backgroundApply() {
+  for (int i = 0; i < g_bgCount; ++i) {
+    if (g_tampura)
+      g_engine.noteOn(g_bg[i].id, g_bg[i].cents, i == 0 ? 0.22f : 0.16f);
+    else
+      g_engine.noteOff(g_bg[i].id);
   }
+}
+
+// Pick mode: a grid click toggles that pitch in the background chord.
+// Full (4 notes) -> the oldest bows out. The choice is law: weather voting
+// stops touching a custom background.
+void backgroundToggleNote(float cents) {
+  g_bgCustom = true;
+  for (int i = 0; i < g_bgCount; ++i) {
+    if (fabsf(g_bg[i].cents - cents) < 1.0f) {
+      g_engine.noteOff(g_bg[i].id);
+      for (int j = i; j < g_bgCount - 1; ++j) g_bg[j] = g_bg[j + 1];
+      --g_bgCount;
+      return;
+    }
+  }
+  if (g_bgCount == 4) {
+    g_engine.noteOff(g_bg[0].id);
+    for (int j = 0; j < 3; ++j) g_bg[j] = g_bg[j + 1];
+    --g_bgCount;
+  }
+  const int32_t id = 1000 + (g_bgNextId++ & 15);
+  g_bg[g_bgCount] = {cents, id};
+  ++g_bgCount;
+  if (g_tampura)
+    g_engine.noteOn(id, cents, g_bgCount == 1 ? 0.22f : 0.16f);
 }
 
 // Ctrl+C must go through the cleanup path (restore termios, stop the queue),
@@ -144,6 +176,8 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
     envLocal += (a > envLocal ? 0.004f : 0.00001f) * (a - envLocal);
   }
   g_env.store(envLocal, std::memory_order_relaxed);
+  // Sympathetic strings: the dry synth excites the JI halo.
+  g_strings.process(samples, samples, frames);
   // Generosity layer: everything played joins a fading ambient memory.
   g_echo.process(samples, samples, frames);
   // The manual looper records synth+ambience and adds loop playback on top.
@@ -279,8 +313,10 @@ void runPending() {
 }
 
 void applyCenter(const Ui& ui) {
-  g_engine.setParam(Param::BaseHz, kBaseOctaves[ui.octave] *
-                                       exp2f(g_sim.centerCents / 1200.0f));
+  const float root =
+      kBaseOctaves[ui.octave] * exp2f(g_sim.centerCents / 1200.0f);
+  g_engine.setParam(Param::BaseHz, root);
+  g_strings.setRootHz(root);  // the halo bends onto the new center
 }
 
 // ~30 Hz from the main loop: playing keeps the path clear; going quiet for
@@ -311,20 +347,19 @@ void weatherTick(const Ui& ui) {
   g_engine.setParam(Param::FilterCutoffHz,
                     clampf(ui.cutoff * ratio, 300.0f, 12000.0f));
 
-  // tampura voting with hysteresis; alternating ids = ADSR crossfade
-  int want = g_weather.fifthVariant;
-  if (t2 > 0.7f) want = 1;
-  else if (t2 < -0.7f) want = 2;
-  else if (t2 > -0.5f && t2 < 0.5f) want = 0;
-  if (want != g_weather.fifthVariant && g_tampura) {
-    g_engine.noteOff(g_weather.fifthId);
-    g_weather.fifthVariant = want;
-    if (want != 2) {
-      g_weather.fifthId = (g_weather.fifthId == kTampuraFifthId)
-                              ? kTampuraFifthId + 1
-                              : kTampuraFifthId;
-      g_engine.noteOn(g_weather.fifthId, want == 0 ? 702.0f : 968.8f,
-                      want == 0 ? 0.16f : 0.14f);
+  // background voting (default set only — a hand-picked chord is law):
+  // every few minutes the fifth quietly becomes a 7/4 and back, with an
+  // ADSR crossfade via a fresh note id
+  if (!g_bgCustom && g_tampura && g_bgCount >= 2) {
+    int want = g_weather.fifthVariant;
+    if (t2 > 0.6f) want = 1;
+    else if (t2 < -0.6f) want = 0;
+    if (want != g_weather.fifthVariant) {
+      g_weather.fifthVariant = want;
+      g_engine.noteOff(g_bg[1].id);
+      g_bg[1].cents = want ? 968.8f : 702.0f;
+      g_bg[1].id = 1000 + (g_bgNextId++ & 15);
+      g_engine.noteOn(g_bg[1].id, g_bg[1].cents, want ? 0.14f : 0.16f);
     }
   }
 }
@@ -417,7 +452,9 @@ void printStatus(const Ui& ui) {
   }
   if (!g_echo.enabled()) printf(" echo:OFF");
   if (!g_tampura) printf(" tamb:OFF");
+  if (!g_strings.enabled()) printf(" str:OFF");
   if (g_reverb.wet() <= 0.0f) printf(" rev:OFF");
+  if (g_pickMode) printf(" [WYBOR TLA %d/4]", g_bgCount);
   if (g_recOn.load(std::memory_order_relaxed))
     printf(" REC:%.0fs", (double)g_recIdx.load() / kSr);
   if (g_sim.inFlight) {
@@ -545,6 +582,8 @@ int main(int argc, char** argv) {
   g_engine.setParam(Param::FilterCutoffHz, 6000.0f);
   g_reverb.init(kSr);
   g_reverb.setWet(0.35f);
+  g_strings.init((float)kSr);
+  g_strings.setRootHz(220.0f);
 
   // Loop storage lives for the whole run; allocated before audio starts.
   // 8 undo levels: the host has RAM to spare, and the fumble gesture eats
@@ -606,6 +645,8 @@ int main(int argc, char** argv) {
          "          wstecz z pamieci echa; lata z rzutami, SHIFT+U cofa)\n");
   printf("  DUCHY:  po ~12 s ciszy pudelko cicho dosiewa twoje wlasne nuty;\n"
          "          pierwszy klawisz je ucisza | SHIFT+W nagrywa sesje do WAV\n");
+  printf("  TLO:    SHIFT+D i klikasz nuty = wybierasz wlasny dron pod spodem\n"
+         "          (max 4, klik drugi raz usuwa) | SHIFT+S struny sympatyczne\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
@@ -616,7 +657,7 @@ int main(int argc, char** argv) {
 
   Ui ui;
   g_weather.start = nowSec();
-  tampuraApply();
+  backgroundApply();
   printStatus(ui);
   double lastStatusAt = nowSec();
 
@@ -666,7 +707,7 @@ int main(int argc, char** argv) {
       } else if (c == '\t') {
         ui.scale = (ui.scale + 1) % (int)ScaleId::Count;
         allOff();  // clean retuning
-        tampuraApply();
+        backgroundApply();
       } else if (c == '`') {
         ui.preset = (ui.preset + 1) % kNumTimbrePresets;
         g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
@@ -679,7 +720,16 @@ int main(int argc, char** argv) {
         g_echo.setEnabled(!g_echo.enabled());
       } else if (c == 'T') {
         g_tampura = !g_tampura;
-        tampuraApply();
+        backgroundApply();
+      } else if (c == 'D') {
+        g_pickMode = !g_pickMode;
+        if (g_pickMode)
+          printf("\n  >> WYBOR TLA: klikaj nuty siatki (toggle, max 4);"
+                 " SHIFT+D konczy\n");
+        else
+          printf("\n  >> tlo ustawione (%d nut)\n", g_bgCount);
+      } else if (c == 'S') {
+        g_strings.setEnabled(!g_strings.enabled());
       } else if (c == 'V') {
         // cycle the room base: dry -> subtle -> default -> cathedral
         // (the weather breathes around this base)
@@ -747,10 +797,17 @@ int main(int argc, char** argv) {
         g_engine.setParam(Param::BendCents, 0.0f);
         g_looper.setRate(1.0f);
         applyCenter(ui);
-        tampuraApply();
+        backgroundApply();
       } else if (keyToGrid(c, kp)) {
         const int id = kp.row * 14 + kp.col;
         const float cents = gridToCents((ScaleId)ui.scale, kp.col, kp.row);
+        if (g_pickMode) {
+          // in pick mode the grid edits the background chord instead of playing
+          backgroundToggleNote(cents);
+          printStatus(ui);
+          lastStatusAt = nowSec();
+          continue;
+        }
         // humanized dynamics — identical velocities sound mechanical
         const float vel = 0.55f + 0.35f * (float)(rand() % 1000) / 1000.0f;
         NoteState& st = g_notes[id];
