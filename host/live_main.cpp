@@ -453,9 +453,17 @@ int main(int argc, char** argv) {
       } else if (c == 'U') {
         g_looper.undoLayer();
       } else if (c == 'C') {
+        // full reset to zero: loop gone, flight cancelled, home center,
+        // tape at 1x, bend neutral — nothing survives a clear
         g_looper.clear();
+        g_pending.clear();
+        g_sim.inFlight = false;
+        g_sim.centerCents = 0.0f;
         g_sim.rateBase = 1.0f;
         g_looper.setRate(1.0f);
+        ui.bend = 0.0f;
+        g_engine.setParam(Param::BendCents, 0.0f);
+        applyCenter(ui);
       } else if (c == '{') {
         g_looper.setPlaybackLevel(g_looper.playbackLevel() - 0.1f);
       } else if (c == '}') {
@@ -463,6 +471,7 @@ int main(int argc, char** argv) {
       } else if (c == '\r' || c == '\n') {
         // panic: silence + neutral pitch + back to home center; loop keeps going
         allOff();
+        g_pending.clear();
         ui.bend = 0.0f;
         g_sim.inFlight = false;
         g_sim.centerCents = 0.0f;
