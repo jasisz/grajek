@@ -175,6 +175,86 @@ std::atomic<bool> g_recOn{false};
 std::atomic<uint32_t> g_recIdx{0};
 std::vector<int16_t>* g_recBuf = nullptr;
 
+// --- the EAR: hold SHIFT+M and the box listens. Your voice joins the chain
+// where the synth does — the tape ages it, the strings halo it in pure
+// intervals, the room holds it — and keeps returning after you let go.
+// Cat-not-Furby + privacy: the input device runs ONLY while the ear is held
+// open (auto-repeat keeps it open; ~0.8 s after the last repeat it closes),
+// and nothing is ever stored. On the device this becomes hold-a-key + the
+// ES8311 mic. Headphones recommended on laptop speakers (feedback).
+AudioQueueRef g_inQueue = nullptr;
+std::atomic<bool> g_earOpen{false};
+double g_earHeldUntil = 0.0;
+
+// tiny SPSC float ring: input-queue thread -> output-queue thread
+constexpr uint32_t kMicRingSize = 16384;  // power of two
+float g_micRing[kMicRingSize];
+std::atomic<uint32_t> g_micHead{0}, g_micTail{0};
+
+void micPush(const float* v, int n) {
+  uint32_t h = g_micHead.load(std::memory_order_relaxed);
+  const uint32_t t = g_micTail.load(std::memory_order_acquire);
+  for (int i = 0; i < n; ++i) {
+    if (h - t >= kMicRingSize) break;  // full: drop
+    g_micRing[h & (kMicRingSize - 1)] = v[i];
+    ++h;
+  }
+  g_micHead.store(h, std::memory_order_release);
+}
+
+float micPop() {
+  const uint32_t t = g_micTail.load(std::memory_order_relaxed);
+  const uint32_t h = g_micHead.load(std::memory_order_acquire);
+  if (t == h) return 0.0f;
+  const float v = g_micRing[t & (kMicRingSize - 1)];
+  g_micTail.store(t + 1, std::memory_order_release);
+  return v;
+}
+
+void earInCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf,
+                   const AudioTimeStamp*, UInt32,
+                   const AudioStreamPacketDescription*) {
+  if (g_earOpen.load(std::memory_order_relaxed))
+    micPush((const float*)buf->mAudioData,
+            (int)(buf->mAudioDataByteSize / sizeof(float)));
+  AudioQueueEnqueueBuffer(q, buf, 0, nullptr);
+}
+
+bool earOpen() {
+  if (!g_inQueue) {  // lazy: the mic permission prompt appears on first use
+    AudioStreamBasicDescription fmt = {};
+    fmt.mSampleRate = kSr;
+    fmt.mFormatID = kAudioFormatLinearPCM;
+    fmt.mFormatFlags =
+        kLinearPCMFormatFlagIsFloat | kLinearPCMFormatFlagIsPacked;
+    fmt.mChannelsPerFrame = 1;
+    fmt.mBitsPerChannel = 32;
+    fmt.mBytesPerFrame = 4;
+    fmt.mFramesPerPacket = 1;
+    fmt.mBytesPerPacket = 4;
+    if (AudioQueueNewInput(&fmt, earInCallback, nullptr, nullptr, nullptr, 0,
+                           &g_inQueue) != noErr)
+      return false;
+    for (int i = 0; i < 3; ++i) {
+      AudioQueueBufferRef b = nullptr;
+      if (AudioQueueAllocateBuffer(g_inQueue, 1024 * sizeof(float), &b) !=
+          noErr)
+        return false;
+      AudioQueueEnqueueBuffer(g_inQueue, b, 0, nullptr);
+    }
+  }
+  g_micHead.store(0);
+  g_micTail.store(0);
+  if (AudioQueueStart(g_inQueue, nullptr) != noErr) return false;
+  g_earOpen.store(true);
+  return true;
+}
+
+void earClose() {
+  g_earOpen.store(false);
+  if (g_inQueue) AudioQueueStop(g_inQueue, true);
+}
+
 void backgroundApply() {
   for (int i = 0; i < g_bgCount; ++i) {
     if (g_tampura)
@@ -225,6 +305,10 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
     envLocal += (a > envLocal ? 0.004f : 0.00001f) * (a - envLocal);
   }
   g_env.store(envLocal, std::memory_order_relaxed);
+  // The ear: the voice enters the chain exactly where the synth does — it
+  // will be taped, haloed by the strings and held by the room.
+  if (g_earOpen.load(std::memory_order_relaxed))
+    for (int i = 0; i < frames; ++i) samples[i] += micPop() * 0.8f;
   // Sympathetic strings: the dry synth excites the JI halo.
   g_strings.process(samples, samples, frames);
   // Generosity layer: everything played joins a fading ambient memory.
@@ -615,6 +699,7 @@ void printStatus(const Ui& ui) {
            (float)g_looper.lengthFrames() / kSr,
            g_looper.playbackLevel() * 100.0f);
   }
+  if (g_earOpen.load(std::memory_order_relaxed)) printf(" UCHO");
   if (g_age != 2) printf(" wiek:%s", kAgeNames[g_age]);
   if (g_pulse.ticking)
     printf(" puls:%d", (int)(60.0 / g_pulse.period + 0.5));
@@ -891,6 +976,10 @@ int main(int argc, char** argv) {
          "          polnuty/osemki), a gdy przestajesz — samo puszcza\n");
   printf("  WIEK:   SHIFT+A cykluje 2-3 / 4-6 / 7+ — pudelko rosnie z\n"
          "          dzieckiem (maluch: pentatonika i zero pokretel)\n");
+  printf("  UCHO:   TRZYMAJ SHIFT+M i spiewaj — glos wpada w tasme, struny\n"
+         "          i poglos, a po puszczeniu wraca coraz ciszej; sluchawki\n"
+         "          zalecane (glosniki = sprzezenie); mikrofon dziala TYLKO\n"
+         "          gdy trzymasz, nic nie jest zapisywane\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
@@ -1007,6 +1096,15 @@ int main(int argc, char** argv) {
         ui.latch = !ui.latch;
       } else if (c == 'H') {
         g_harmony = !g_harmony;
+      } else if (c == 'M') {
+        // hold-to-listen: auto-repeat keeps refreshing the deadline
+        g_earHeldUntil = nowSec() + 0.8;
+        if (!g_earOpen.load(std::memory_order_relaxed)) {
+          if (earOpen())
+            printf("\n  >> UCHO otwarte — spiewaj (trzymaj M)\n");
+          else
+            printf("\n  >> nie moge otworzyc mikrofonu (uprawnienia?)\n");
+        }
       } else if (c == 'E') {
         g_echo.setEnabled(!g_echo.enabled());
       } else if (c == 'T') {
@@ -1145,6 +1243,13 @@ int main(int argc, char** argv) {
     weatherTick(ui);
     gardenTick(ui);
     pulseTick();
+    if (g_earOpen.load(std::memory_order_relaxed) &&
+        nowSec() > g_earHeldUntil) {
+      earClose();
+      printf("\n  >> ucho zamkniete — sluchaj, jak wraca\n");
+      printStatus(ui);
+      lastStatusAt = nowSec();
+    }
 
     // keep the loop position / flight state on screen while idling
     const bool busy =
@@ -1180,6 +1285,10 @@ int main(int argc, char** argv) {
   }
   allOff();
   sleepMs(150);  // let the release tail ring before closing the queue
+  if (g_inQueue) {
+    earClose();
+    AudioQueueDispose(g_inQueue, true);
+  }
   AudioQueueStop(queue, true);
   AudioQueueDispose(queue, true);
   tcsetattr(STDIN_FILENO, TCSANOW, &orig);
