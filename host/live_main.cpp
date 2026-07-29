@@ -48,9 +48,12 @@
 #include <functional>
 #include <vector>
 
+#include <stdlib.h>
+
 #include "ga_echo.h"
 #include "ga_engine.h"
 #include "ga_looper.h"
+#include "ga_reverb.h"
 #include "ga_scales.h"
 
 using namespace ga;
@@ -63,9 +66,26 @@ constexpr int kNumBufs = 3;         // ~16 ms total output latency
 
 Engine g_engine;
 Looper g_looper;
-EchoTape g_echo;  // always-on ambient memory: play anything, it comes back
+EchoTape g_echo;   // always-on ambient memory: play anything, it comes back
+Reverb g_reverb;   // the single biggest "sounds pretty by itself" ingredient
 constexpr int kMaxLoopSec = 60;
 constexpr float kEchoSec = 4.0f;
+
+// Tampura: a quiet 1/1 + 3/2 pedal under everything — random notes over a
+// root drone sound intentional. Follows toss modulations automatically
+// (voices track BaseHz live).
+bool g_tampura = true;
+constexpr int32_t kTampuraRootId = 1000, kTampuraFifthId = 1001;
+
+void tampuraApply() {
+  if (g_tampura) {
+    g_engine.noteOn(kTampuraRootId, 0.0f, 0.22f);
+    g_engine.noteOn(kTampuraFifthId, 702.0f, 0.16f);
+  } else {
+    g_engine.noteOff(kTampuraRootId);
+    g_engine.noteOff(kTampuraFifthId);
+  }
+}
 
 // Ctrl+C must go through the cleanup path (restore termios, stop the queue),
 // not kill the process mid-raw-mode.
@@ -80,6 +100,8 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
   g_echo.process(samples, samples, frames);
   // The manual looper records synth+ambience and adds loop playback on top.
   g_looper.process(samples, samples, frames);
+  // Reverb last, so the loop and echo sit in the same room.
+  g_reverb.process(samples, frames);
   buf->mAudioDataByteSize = (UInt32)(frames * sizeof(float));
   AudioQueueEnqueueBuffer(q, buf, 0, nullptr);
 }
@@ -145,7 +167,8 @@ double nowSec() {
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
-const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED"};
+const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED",
+                                               "CHIME"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 
 // JI ladder for toss landings; sign of spin mirrors it downward (utonal).
@@ -154,8 +177,8 @@ const float kRungCents[kNumRungs] = {203.9f, 386.3f, 702.0f, 968.8f, 1200.0f};
 const char* kRungNames[kNumRungs] = {"9/8", "5/4", "3/2", "7/4", "2/1"};
 
 struct Ui {
-  int scale = (int)ScaleId::EDO19;
-  int preset = 0;
+  int scale = (int)ScaleId::JI11;
+  int preset = 3;  // CHIME — the "pretty by itself" default
   int octave = 2;  // 220 Hz
   bool latch = false;
   float cutoff = 6000.0f;
@@ -228,6 +251,8 @@ void printStatus(const Ui& ui) {
            g_looper.playbackLevel() * 100.0f);
   }
   if (!g_echo.enabled()) printf(" echo:OFF");
+  if (!g_tampura) printf(" tamb:OFF");
+  if (g_reverb.wet() <= 0.0f) printf(" rev:OFF");
   if (g_sim.inFlight) {
     printf("  LOT %.2fs spin:%+d", nowSec() - g_sim.t0, g_sim.spin);
   } else if (g_sim.centerCents != 0.0f) {
@@ -346,10 +371,13 @@ int selftest() {
 }  // namespace
 
 int main(int argc, char** argv) {
+  srand((unsigned)time(nullptr));
   g_engine.init(kSr);
-  g_engine.setParam(Param::TimbrePreset, 0);
+  g_engine.setParam(Param::TimbrePreset, 3);  // CHIME
   g_engine.setParam(Param::BaseHz, 220.0f);
   g_engine.setParam(Param::FilterCutoffHz, 6000.0f);
+  g_reverb.init(kSr);
+  g_reverb.setWet(0.35f);
 
   // Loop storage lives for the whole run; allocated before audio starts.
   // 8 undo levels: the host has RAM to spare, and the fumble gesture eats
@@ -394,9 +422,10 @@ int main(int argc, char** argv) {
   tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 
   printf("grajek_live — engine at %d Hz, ~16 ms latency\n", kSr);
-  printf("  ECHO zawsze gra: co zagrasz, wraca po %.0f s coraz ciszej —\n"
-         "  klikaj pojedyncze nuty i sluchaj, jak sklada sie pejzaz"
-         " (SHIFT+E wylacza)\n", (double)kEchoSec);
+  printf("  Domyslnie gra WSZYSTKO, co robi ladnie: barwa CHIME, poglos,\n"
+         "  tampura (cichy dron pod spodem) i echo %.0f s. Klikaj pojedyncze\n"
+         "  nuty i sluchaj. SHIFT+E echo, SHIFT+T tampura, SHIFT+V poglos.\n",
+         (double)kEchoSec);
   printf("  grid: keyboard rows = instrument rows (bottom = lowest)\n");
   printf("  TAB scale | ` timbre | BACKSPACE octave | SHIFT+L latch (drony!)\n");
   printf("  arrows <- -> bend | up/down filter | ENTER panic+re-center | ESC quit\n");
@@ -408,6 +437,7 @@ int main(int argc, char** argv) {
          "          SHIFT+X = fuszerka (muzyka upada, tracisz warstwe)\n\n");
 
   Ui ui;
+  tampuraApply();
   printStatus(ui);
   double lastStatusAt = nowSec();
 
@@ -453,6 +483,7 @@ int main(int argc, char** argv) {
       } else if (c == '\t') {
         ui.scale = (ui.scale + 1) % (int)ScaleId::Count;
         allOff();  // clean retuning
+        tampuraApply();
       } else if (c == '`') {
         ui.preset = (ui.preset + 1) % kNumTimbrePresets;
         g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
@@ -463,6 +494,14 @@ int main(int argc, char** argv) {
         ui.latch = !ui.latch;
       } else if (c == 'E') {
         g_echo.setEnabled(!g_echo.enabled());
+      } else if (c == 'T') {
+        g_tampura = !g_tampura;
+        tampuraApply();
+      } else if (c == 'V') {
+        // cycle the room: dry -> subtle -> default -> cathedral
+        const float w = g_reverb.wet();
+        g_reverb.setWet(w <= 0.0f ? 0.2f : (w <= 0.2f ? 0.35f
+                                          : (w <= 0.35f ? 0.55f : 0.0f)));
       } else if (c == 'R') {
         g_looper.toggleRecord();
       } else if (c == 'P') {
@@ -497,22 +536,25 @@ int main(int argc, char** argv) {
         g_engine.setParam(Param::BendCents, 0.0f);
         g_looper.setRate(1.0f);
         applyCenter(ui);
+        tampuraApply();
       } else if (keyToGrid(c, kp)) {
         const int id = kp.row * 14 + kp.col;
         const float cents = gridToCents((ScaleId)ui.scale, kp.col, kp.row);
+        // humanized dynamics — identical velocities sound mechanical
+        const float vel = 0.55f + 0.35f * (float)(rand() % 1000) / 1000.0f;
         NoteState& st = g_notes[id];
         if (ui.latch) {
           if (st.on) {
             g_engine.noteOff(id);
             st = NoteState{};
           } else {
-            g_engine.noteOn(id, cents, 0.9f);
+            g_engine.noteOn(id, cents, vel);
             st.on = true;
             st.latched = true;
           }
         } else {
           // press/auto-repeat plays and extends; fades out 0.6 s later
-          g_engine.noteOn(id, cents, 0.9f);
+          g_engine.noteOn(id, cents, vel);
           st.on = true;
           st.latched = false;
           st.offAt = nowSec() + 0.6;

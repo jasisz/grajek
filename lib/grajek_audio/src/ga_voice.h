@@ -11,6 +11,9 @@ struct Timbre {
   static constexpr int kPartials = 4;
   float ratio[kPartials]  = {1.0f, 2.0f, 3.0f, 4.0f};    // f0 multipliers
   float gain[kPartials]   = {0.9f, 0.12f, 0.05f, 0.02f}; // partial amplitudes
+  // Per-partial decay time constant in seconds (<= 0 = the partial holds).
+  // A bright attack whose upper partials melt away = bell/kalimba character.
+  float pdecay[kPartials] = {0.0f, 0.0f, 0.0f, 0.0f};
   float detuneCents       = 0.3f;   // max random detune of partials > 1
   float attack  = 0.05f;
   float decay   = 0.3f;
@@ -19,8 +22,9 @@ struct Timbre {
 };
 
 // 0 = PURE (clean tone), 1 = DRONE (octaves, strong beating, slow envelope),
-// 2 = REED (odd harmonics, fast attack)
-constexpr int kNumTimbrePresets = 3;
+// 2 = REED (odd harmonics, fast attack), 3 = CHIME (music-box ping melting
+// into a pure tone)
+constexpr int kNumTimbrePresets = 4;
 Timbre timbrePreset(int idx);
 
 class Voice {
@@ -48,7 +52,9 @@ class Voice {
   uint32_t phase_[Timbre::kPartials] = {0};
   float ratio_[Timbre::kPartials] = {1.0f};
   float gain_[Timbre::kPartials] = {0.0f};
-  float det_[Timbre::kPartials] = {0.0f};  // detune in cents
+  float det_[Timbre::kPartials] = {0.0f};    // detune in cents
+  float pdecay_[Timbre::kPartials] = {0.0f}; // per-partial decay tau (s)
+  float pamp_[Timbre::kPartials] = {1.0f};   // per-partial decaying amplitude
   float cents_ = 0.0f;
   float targetCents_ = 0.0f;
   float glideSec_ = 0.0f;

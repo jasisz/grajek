@@ -24,6 +24,14 @@ Timbre timbrePreset(int idx) {
       t.detuneCents = 0.2f;
       t.attack = 0.02f; t.decay = 0.2f; t.sustain = 0.8f; t.release = 0.3f;
       break;
+    case 3:  // CHIME — bright music-box ping, uppers melt into a pure tone
+      t.ratio[0] = 1; t.ratio[1] = 2; t.ratio[2] = 3; t.ratio[3] = 4;
+      t.gain[0] = 0.85f; t.gain[1] = 0.3f; t.gain[2] = 0.22f; t.gain[3] = 0.14f;
+      t.pdecay[0] = 0.0f; t.pdecay[1] = 1.2f; t.pdecay[2] = 0.4f;
+      t.pdecay[3] = 0.2f;
+      t.detuneCents = 0.25f;
+      t.attack = 0.003f; t.decay = 0.5f; t.sustain = 0.5f; t.release = 2.8f;
+      break;
   }
   return t;
 }
@@ -62,6 +70,8 @@ void Voice::noteOn(int32_t id, float cents, float vel, const Timbre& t,
     ratio_[k] = t.ratio[k];
     gain_[k] = t.gain[k];
     det_[k] = (k == 0) ? 0.0f : rnd11() * t.detuneCents;
+    pdecay_[k] = t.pdecay[k];
+    pamp_[k] = 1.0f;
   }
   env_.setTimes(t.attack, t.decay, t.sustain, t.release);
   targetCents_ = cents;
@@ -92,10 +102,14 @@ void Voice::render(float* out, int n, float baseHz, float bendRatio) {
       g[k] = 0.0f;
       inc[k] = 0;
     } else {
-      g[k] = gain_[k];
+      g[k] = gain_[k] * pamp_[k];
       inc[k] = (uint32_t)(ph * 4294967296.0);
     }
   }
+  // per-partial melt (block granularity is plenty at 64-128 samples)
+  for (int k = 0; k < Timbre::kPartials; ++k)
+    if (pdecay_[k] > 0.0f)
+      pamp_[k] *= expf(-(float)n / (sr_ * pdecay_[k]));
 
   const float* tab = sineTable().t;  // hoisted out of the sample loop
   for (int i = 0; i < n; ++i) {

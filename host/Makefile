@@ -8,7 +8,8 @@ ENGINE_CPP := $(ENGINE)/ga_dsp.cpp \
               $(ENGINE)/ga_voice.cpp \
               $(ENGINE)/ga_engine.cpp \
               $(ENGINE)/ga_scales.cpp \
-              $(ENGINE)/ga_looper.cpp
+              $(ENGINE)/ga_looper.cpp \
+              $(ENGINE)/ga_reverb.cpp
 
 SRC := main.cpp $(ENGINE_CPP)
 HDR := $(wildcard *.h) $(wildcard $(ENGINE)/*.h)
