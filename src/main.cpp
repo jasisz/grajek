@@ -6,6 +6,7 @@
 // The two sides talk exclusively through the engine's lock-free event queue.
 #include <M5Cardputer.h>
 
+#include "ambient.h"
 #include "ga_engine.h"
 #include "hal/audio_out.h"
 #include "input/keys.h"
@@ -78,15 +79,21 @@ void setup() {
   M5Cardputer.Display.setBrightness(160);
 
   canvas.setPsram(false);  // StampS3A has no PSRAM — allocate in internal RAM
-  canvas.setColorDepth(16);
+  canvas.setColorDepth(8);  // 8-bit color frees ~32 KB for the echo tape
   if (!canvas.createSprite(240, 135))
     Serial.println("grajek: canvas allocation FAILED");
 
   engine.init(48000.0f);
   engine.setParam(ga::Param::FilterCutoffHz, 6000.0f);
+  engine.setParam(ga::Param::TimbrePreset, 3.0f);  // CHIME by default
 
   audioOk = hal::audioInit(&engine);
   if (!audioOk) Serial.println("grajek: audio init FAILED");
+
+  // the ambient brain: background chord, weather, ghost garden — alive from
+  // boot, in the menu too (the box hums the moment it wakes up)
+  ambient::init(&engine);
+  ambient::setPresetAttack(ga::timbrePreset(3).attack);
 
   input::keysInit();
   lastTickMs = millis();
@@ -133,6 +140,8 @@ void loop() {
       lastFrameMs = now;
     }
   }
+
+  ambient::tick();
 
   delay(2);  // breathing room for WDT/USB; audio lives on the other core anyway
 }

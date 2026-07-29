@@ -70,7 +70,19 @@ uv venv .venv && uv pip install --python .venv/bin/python platformio  # once
 
 On the device: menu → keys `1`–`4` pick a mode, **BtnGO returns to the
 menu**. In INSTRUMENT mode the leftmost keyboard column is the control column
-(top to bottom: scale, timbre, IMU role, octave); the remaining 13×4 keys play.
+(top to bottom: scale, timbre, IMU tilt role, octave); the remaining 13×4
+keys play.
+
+**Device v1 sound chain** (same portable modules as the host): engine →
+sympathetic strings → echo tape (3 s at 16 kHz behind a lo-fi rate bridge —
+no PSRAM, and the aging tape loves the darkening anyway) → reverb. The
+ambient brain (background chord, weather, ghost garden) runs from boot, in
+the menu too. Gestures: **toss** is always armed — free fall lifts the music
+in a glissando, the catch lands it re-rooted on a JI rung (flight time =
+rung, spin direction = up/down); **hold `ctrl` + grid keys** picks the
+background chord (tap `ctrl` = octave). Deferred to v2: FREEZE/looper floor
+(RAM audit on real hardware first), the mic path, psychoacoustic bass for
+the tiny speaker.
 
 ## Hardware — facts verified against official sources
 

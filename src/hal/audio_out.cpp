@@ -2,15 +2,33 @@
 
 #include <M5Unified.h>
 #include <driver/i2s_std.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <atomic>
+
 #include "board_pins.h"
+#include "ga_bridge.h"
 
 namespace {
 
 i2s_chan_handle_t s_tx = nullptr;
 ga::Engine* s_engine = nullptr;
+
+// The effect chain lives here, in static state:
+//  - reverb: ~55 KB of comb/allpass floats (.bss)
+//  - strings: ~9 KB
+//  - echo tape: heap-allocated, 3 s at 16 kHz (96 KB) behind a rate bridge
+ga::SympatheticStrings s_strings;
+ga::Reverb s_reverb;
+ga::EchoTape s_echo;
+ga::LofiBridge3<ga::EchoTape> s_echoBridge;
+int16_t* s_tape = nullptr;
+constexpr int kEchoRate = 16000;
+constexpr float kEchoSeconds = 3.0f;
+
+std::atomic<float> s_env{0.0f};
 
 bool es8311Write(uint8_t reg, uint8_t val) {
   return M5.In_I2C.writeRegister8(hal::kEs8311Addr, reg, val, 400000);
@@ -38,8 +56,20 @@ void audioTask(void*) {
   static float fbuf[hal::kAudioFrames];
   static int16_t mono[hal::kAudioFrames];
   static int16_t stereo[hal::kAudioFrames * 2];
+  float envLocal = 0.0f;
   for (;;) {
     s_engine->process(fbuf, hal::kAudioFrames);
+    // publish the dry-synth envelope for the weather system
+    for (int i = 0; i < hal::kAudioFrames; ++i) {
+      const float a = fabsf(fbuf[i]);
+      envLocal += (a > envLocal ? 0.004f : 0.00001f) * (a - envLocal);
+    }
+    s_env.store(envLocal, std::memory_order_relaxed);
+
+    s_strings.process(fbuf, fbuf, hal::kAudioFrames);
+    if (s_tape) s_echoBridge.process(fbuf, hal::kAudioFrames);
+    s_reverb.process(fbuf, hal::kAudioFrames);
+
     ga::Engine::toInt16(fbuf, mono, hal::kAudioFrames);
     // The ES8311 DAC is mono but the I2S frame is stereo — duplicate the channel
     for (int i = 0; i < hal::kAudioFrames; ++i) {
@@ -56,6 +86,12 @@ void audioTask(void*) {
 }  // namespace
 
 namespace hal {
+
+ga::SympatheticStrings& strings() { return s_strings; }
+ga::EchoTape& echo() { return s_echo; }
+ga::Reverb& reverb() { return s_reverb; }
+bool echoAvailable() { return s_tape != nullptr; }
+float audioEnv() { return s_env.load(std::memory_order_relaxed); }
 
 bool audioInit(ga::Engine* engine) {
   s_engine = engine;
@@ -85,6 +121,26 @@ bool audioInit(ga::Engine* engine) {
   if (i2s_channel_enable(s_tx) != ESP_OK) return false;
   vTaskDelay(pdMS_TO_TICKS(20));  // "Codec takes some time to initialize"
   if (!es8311InitPlayback()) return false;
+
+  // --- effect chain ---
+  const float sr = engine->sampleRate();
+  s_strings.init(sr);
+  s_strings.setRootHz(220.0f);
+  s_reverb.init(sr);
+  s_reverb.setWet(0.32f);
+  const size_t tapeFrames = (size_t)(kEchoRate * kEchoSeconds);
+  s_tape = (int16_t*)heap_caps_malloc(tapeFrames * sizeof(int16_t),
+                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (s_tape) {
+    s_echo.init(s_tape, (uint32_t)tapeFrames, (float)kEchoRate);
+    s_echo.setFeedback(0.55f);
+    s_echo.setLevel(0.5f);
+    s_echoBridge.init(&s_echo);
+  } else {
+    Serial.println("grajek: echo tape alloc FAILED — playing without echo");
+  }
+  Serial.printf("grajek: free heap after audio init: %u\n",
+                (unsigned)esp_get_free_heap_size());
 
   const BaseType_t ok = xTaskCreatePinnedToCore(
       audioTask, "audio", 8192, nullptr, configMAX_PRIORITIES - 3, nullptr, 0);
