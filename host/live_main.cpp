@@ -153,6 +153,8 @@ struct Pulse {
   double nextBeatAt = 0.0;
   double lastOnset = 0.0;
   int beatsAlone = 0;
+  int beatsPlayed = 0;  // warm-up: the heart fades in over its first beats
+  int step = 0;         // position in the background-chord arpeggio
   bool ticking = false;
   double memory = 0.0;  // last stable period — the ghosts sow on this grid
 };
@@ -413,6 +415,7 @@ void gardenPush(float cents) {
 void pulseOnOnset() {
   const double t = nowSec();
   Pulse& p = g_pulse;
+  const double d = p.lastOnset > 0.0 ? t - p.lastOnset : 0.0;
   if (p.count < 8) {
     p.onsets[p.count++] = t;
   } else {
@@ -420,11 +423,34 @@ void pulseOnOnset() {
     p.onsets[7] = t;
   }
   p.lastOnset = t;
+
+  if (p.ticking) {
+    // ENTRAINED: a phase-locked loop, not a pass/fail test — the heart
+    // bends toward the player instead of giving up.
+    p.beatsAlone = 0;
+    const double r = p.period > 0.0 ? d / p.period : 0.0;
+    if (r > 0.7 && r < 1.4) {
+      p.period += 0.25 * (d - p.period);          // tempo follows you
+    } else if (r > 1.6 && r < 2.4) {
+      p.period += 0.12 * (d * 0.5 - p.period);    // you moved to half notes
+    } else if (r > 0.35 && r < 0.65) {
+      p.period += 0.12 * (d * 2.0 - p.period);    // you moved to eighths
+    }
+    p.memory = p.period;
+    // phase: nudge the beat grid halfway toward this onset
+    double e = t - p.nextBeatAt;
+    e -= p.period * round(e / p.period);  // wrapped to [-T/2, T/2]
+    p.nextBeatAt += 0.5 * e;
+    while (p.nextBeatAt <= t) p.nextBeatAt += p.period;
+    return;
+  }
+
+  // bootstrap: a few even intervals summon the heart
   double ioi[7];
   int n = 0;
   for (int i = 1; i < p.count; ++i) {
-    const double d = p.onsets[i] - p.onsets[i - 1];
-    if (d > 0.18 && d < 2.0) ioi[n++] = d;
+    const double dd = p.onsets[i] - p.onsets[i - 1];
+    if (dd > 0.18 && dd < 2.0) ioi[n++] = dd;
   }
   if (n < 3) return;
   const int m = n < 5 ? n : 5;  // judge the last few intervals
@@ -441,10 +467,12 @@ void pulseOnOnset() {
   for (int i = 0; i < m; ++i)
     if (fabs(w[i] - med) < 0.15 * med) ++good;
   if (good >= m - 1) {
-    p.period = p.ticking ? 0.7 * p.period + 0.3 * med : med;
-    p.memory = p.period;
-    p.nextBeatAt = t + p.period;  // the beat re-anchors to YOUR press
+    p.period = med;
+    p.memory = med;
+    p.nextBeatAt = t + p.period;  // the beat anchors to YOUR press
     p.beatsAlone = 0;
+    p.beatsPlayed = 0;
+    p.step = 0;
     p.ticking = true;
   }
 }
@@ -459,11 +487,29 @@ void pulseTick() {
   if (fade <= 0.0f) {
     p.ticking = false;
     p.count = 0;
+    p.step = 0;
+    p.beatsPlayed = 0;
     return;
   }
-  // a soft heartbeat on the root — MUSICBOX ends by itself, no note-off
+  if (p.beatsPlayed < 12) ++p.beatsPlayed;
+  const float warm =  // the heart fades IN too — no sudden metronome
+      p.beatsPlayed < 3 ? 0.3f + (float)p.beatsPlayed * 0.23f : 1.0f;
+
+  // What the heart plays: an arpeggio of YOUR background chord, one note
+  // per beat, accent on the start of each cycle. Default 1/1+3/2 gives a
+  // root-fifth heartbeat; a hand-picked 4-note chord becomes a 4-note riff.
+  float cents = 0.0f, accent = 1.0f;
+  if (g_tampura && g_bgCount > 0) {
+    const int i = p.step % g_bgCount;
+    cents = g_bg[i].cents;
+    accent = i == 0 ? 1.2f : 0.8f;
+    ++p.step;
+  }
+  float vel = 0.17f * fade * warm * accent;
+  if (vel > 0.24f) vel = 0.24f;
+  // MUSICBOX ends by itself — no note-off bookkeeping
   g_engine.setParam(Param::TimbrePreset, 4.0f);
-  g_engine.noteOn(1300, 0.0f, 0.16f * fade);
+  g_engine.noteOn(1300, cents, vel);
   g_engine.setParam(Param::TimbrePreset, (float)g_uiPreset);
   p.nextBeatAt += p.period;
   while (p.nextBeatAt < now) p.nextBeatAt += p.period;  // never spiral
@@ -821,8 +867,9 @@ int main(int argc, char** argv) {
          "          (max 4, klik drugi raz usuwa) | SHIFT+S struny sympatyczne\n");
   printf("  SHIFT+H cien harmoniczny (rzad wyzej gra cicho z toba — w PENTA\n"
          "          to tercje) | dusza: stan i wspomnienia w grajek_soul.txt\n");
-  printf("  PULS:   graj rowno kilka nut, a dolaczy ciche serce w TWOIM\n"
-         "          tempie; przestan albo plyn rubato — samo puszcza\n");
+  printf("  PULS:   graj rowno kilka nut, a dolaczy serce grajace ARPEGGIO\n"
+         "          TWOJEGO TLA w twoim tempie; plynie za toba (tez na\n"
+         "          polnuty/osemki), a gdy przestajesz — samo puszcza\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
