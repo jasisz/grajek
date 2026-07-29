@@ -7,6 +7,10 @@
 //  - 19-EDO: row = +8 steps (505.3 c)
 //  - 31-EDO: row = +13 steps (503.2 c)
 //  - JI 11-limit (Partch spirit): 14 ratios per octave, row = +1200 c
+//  - PENTA JI (major pentatonic 1/1 9/8 5/4 3/2 5/3) and MAJOR JI
+//    (Ptolemy's diatonic): row = +2 scale steps, so vertical neighbours are
+//    thirds and a whole column is a pretty chord — the "happy" scales where
+//    no pair of keys can clash
 //
 // Known trade-off: on the device the INSTRUMENT mode reserves column 0 for
 // controls, so only 13 of the 14 JI ratios are reachable (the 14th, 11/6,
@@ -20,7 +24,7 @@ namespace ga {
 constexpr int kGridCols = 14;
 constexpr int kGridRows = 4;
 
-enum class ScaleId : uint8_t { EDO12, EDO19, EDO31, JI11, Count };
+enum class ScaleId : uint8_t { EDO12, EDO19, EDO31, JI11, PENTA, MAJOR, Count };
 
 struct ScaleInfo {
   const char* name;   // short name for the LCD

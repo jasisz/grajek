@@ -29,6 +29,18 @@ const float* ji11Cents() {
 
 int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+// The "happy" subsets, in pure intonation:
+// major pentatonic 1/1 9/8 5/4 3/2 5/3 — the kalimba/wind-chime scale
+const float kPenta[5] = {0.0f, 203.9f, 386.3f, 702.0f, 884.4f};
+// Ptolemy's intense diatonic (just major): 1/1 9/8 5/4 4/3 3/2 5/3 15/8
+const float kMajor[7] = {0.0f, 203.9f, 386.3f, 498.0f,
+                         702.0f, 884.4f, 1088.3f};
+
+float stepTable(const float* t, int n, int degree) {
+  const int oct = degree / n;
+  return t[degree % n] + 1200.0f * (float)oct;
+}
+
 }  // namespace
 
 const ScaleInfo& scaleInfo(ScaleId s) {
@@ -37,6 +49,8 @@ const ScaleInfo& scaleInfo(ScaleId s) {
       {"19-EDO", "row = +8 steps (fourth)"},
       {"31-EDO", "row = +13 steps (fourth)"},
       {"JI 11-limit", "14 ratios/octave, row = +octave"},
+      {"PENTA JI", "major pentatonic, row = +2 steps (thirds)"},
+      {"MAJOR JI", "just major, row = +2 steps (thirds)"},
   };
   int i = (int)s;
   if (i < 0 || i >= (int)ScaleId::Count) i = 0;
@@ -51,6 +65,8 @@ float gridToCents(ScaleId s, int col, int row) {
     case ScaleId::EDO19: return (float)(col + row * 8) * (1200.0f / 19.0f);
     case ScaleId::EDO31: return (float)(col + row * 13) * (1200.0f / 31.0f);
     case ScaleId::JI11:  return ji11Cents()[col] + (float)row * 1200.0f;
+    case ScaleId::PENTA: return stepTable(kPenta, 5, col + row * 2);
+    case ScaleId::MAJOR: return stepTable(kMajor, 7, col + row * 2);
     default:             return (float)col * 100.0f;
   }
 }

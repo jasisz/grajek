@@ -37,7 +37,7 @@ class ModeInstrument : public Mode {
   void land(ModeCtx&, float flightSec);
   static const char* roleName(ImuRole r);
 
-  ga::ScaleId scale_ = ga::ScaleId::JI11;
+  ga::ScaleId scale_ = ga::ScaleId::PENTA;  // the happy default
   int preset_ = 3;  // CHIME — the "pretty by itself" default
   int octave_ = 2;  // index into {55, 110, 220, 440}
   ImuRole imuRole_ = ImuRole::Bend;

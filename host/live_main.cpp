@@ -271,7 +271,7 @@ const float kRungCents[kNumRungs] = {203.9f, 386.3f, 702.0f, 968.8f, 1200.0f};
 const char* kRungNames[kNumRungs] = {"9/8", "5/4", "3/2", "7/4", "2/1"};
 
 struct Ui {
-  int scale = (int)ScaleId::JI11;
+  int scale = (int)ScaleId::PENTA;  // the happy default — no wrong keys
   int preset = 3;  // CHIME — the "pretty by itself" default
   int octave = 2;  // 220 Hz
   bool latch = false;
