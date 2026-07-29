@@ -42,6 +42,8 @@ class Reverb {
   int combOff_[kNumCombs] = {0};      // start offsets into comb_
   int allpassOff_[kNumAllpass] = {0};
 
+  float kHpWet_ = 0.026f;  // one-pole HP ~200 Hz on the wet sum (anti-mud)
+  float hpLp_ = 0.0f;
   std::atomic<float> wet_{0.35f};
   std::atomic<float> room_{0.84f};  // stored as comb feedback
   std::atomic<float> damp_{0.25f};

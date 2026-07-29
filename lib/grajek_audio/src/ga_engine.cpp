@@ -75,8 +75,27 @@ void Engine::handle(const Event& e) {
       // Glide only on legato retrigger of the same note id; a stolen voice
       // must not sweep in from an unrelated pitch.
       const bool sameId = v->active() && v->id() == e.id;
-      v->noteOn(e.id, e.a, e.b, timbre_, sameId ? glideSec_ : 0.0f,
-                ++ageCounter_);
+
+      // Perceptual key tracking (equal-loudness contour): high notes land
+      // quieter and darker, low notes get a little body — a lazy keypress is
+      // perceptually balanced in every register, piercing highs cannot
+      // happen. Piecewise-linear gain over octaves relative to 220 Hz.
+      const float hz = baseHz_ * centsToRatio(e.a);
+      float oct = log2f(hz / 220.0f);
+      oct = clampf(oct, -2.0f, 2.0f);
+      // linear gains at octaves -2..+2: {+2, +2.5, 0, -3, -6} dB
+      static const float kLoud[5] = {1.26f, 1.33f, 1.0f, 0.708f, 0.501f};
+      const float x = oct + 2.0f;
+      const int i0 = (int)x > 3 ? 3 : (int)x;
+      const float frac = x - (float)i0;
+      const float loud = kLoud[i0] + (kLoud[i0 + 1] - kLoud[i0]) * frac;
+      // brightness tracking: upper partials fade as pitch rises
+      Timbre tl = timbre_;
+      const float bright = clampf(1.0f - 0.25f * oct, 0.5f, 1.3f);
+      for (int k = 1; k < Timbre::kPartials; ++k) tl.gain[k] *= bright;
+
+      v->noteOn(e.id, e.a, clampf(e.b * loud, 0.0f, 1.0f), tl,
+                sameId ? glideSec_ : 0.0f, ++ageCounter_);
       break;
     }
     case Event::NoteOff:

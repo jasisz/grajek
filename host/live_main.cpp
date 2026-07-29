@@ -391,7 +391,7 @@ int main(int argc, char** argv) {
   g_looper.setPlaybackLevel(0.8f);  // leave headroom to play over the loop
 
   static std::vector<int16_t> echoBuf((size_t)(kEchoSec * kSr));
-  g_echo.init(echoBuf.data(), (uint32_t)echoBuf.size());
+  g_echo.init(echoBuf.data(), (uint32_t)echoBuf.size(), (float)kSr);
   g_echo.setFeedback(0.55f);  // each return ~5 dB quieter, ~4 audible repeats
   g_echo.setLevel(0.5f);
 

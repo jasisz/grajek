@@ -1,5 +1,6 @@
 #include "ga_reverb.h"
 
+#include <math.h>
 #include <string.h>
 
 namespace ga {
@@ -8,7 +9,9 @@ constexpr int Reverb::kCombLen[];
 constexpr int Reverb::kAllpassLen[];
 
 void Reverb::init(float sampleRate) {
-  (void)sampleRate;  // lengths are tuned for 48 kHz
+  // comb/allpass lengths are tuned for 48 kHz; only the wet HP tracks sr
+  kHpWet_ = 1.0f - expf(-6.2831853f * 200.0f / sampleRate);
+  hpLp_ = 0.0f;
   memset(comb_, 0, sizeof(comb_));
   memset(allpass_, 0, sizeof(allpass_));
   memset(combFilt_, 0, sizeof(combFilt_));
@@ -73,6 +76,9 @@ void Reverb::process(float* buf, int n) {
       if (++idx >= kAllpassLen[a]) idx = 0;
       s = out;
     }
+    // high-pass the wet sum (~200 Hz): the tail adds air, never mud
+    hpLp_ += kHpWet_ * (s - hpLp_);
+    s -= hpLp_;
     buf[i] += s * wet * 3.0f;  // wet make-up gain (Freeverb convention)
   }
 }
