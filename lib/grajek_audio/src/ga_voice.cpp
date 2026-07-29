@@ -37,6 +37,16 @@ Timbre timbrePreset(int idx) {
       t.shimmer = 0.9f;
       t.attack = 0.003f; t.decay = 0.5f; t.sustain = 0.55f; t.release = 2.8f;
       break;
+    case 4:  // MUSICBOX — a plucked tine: bright sparkle, no sustain, the
+             // note ends by itself (sustain 0 -> the voice frees its slot)
+      t.ratio[0] = 1; t.ratio[1] = 2; t.ratio[2] = 4; t.ratio[3] = 6;
+      t.gain[0] = 0.7f; t.gain[1] = 0.4f; t.gain[2] = 0.3f; t.gain[3] = 0.18f;
+      t.pdecay[0] = 1.2f; t.pdecay[1] = 0.6f; t.pdecay[2] = 0.25f;
+      t.pdecay[3] = 0.12f;
+      t.detuneCents = 0.3f;
+      t.shimmer = 0.4f;
+      t.attack = 0.001f; t.decay = 0.9f; t.sustain = 0.0f; t.release = 0.6f;
+      break;
   }
   return t;
 }

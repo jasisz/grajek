@@ -26,8 +26,9 @@ struct Timbre {
 
 // 0 = PURE (clean tone), 1 = DRONE (octaves, strong beating, slow envelope),
 // 2 = REED (odd harmonics, fast attack), 3 = CHIME (music-box ping melting
-// into a pure tone)
-constexpr int kNumTimbrePresets = 4;
+// into a pure tone), 4 = MUSICBOX (percussive plucked tine — bright, ends
+// by itself, made for rhythmic playing)
+constexpr int kNumTimbrePresets = 5;
 Timbre timbrePreset(int idx);
 
 class Voice {

@@ -262,7 +262,7 @@ double nowSec() {
 }
 
 const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED",
-                                               "CHIME"};
+                                               "CHIME", "MUSICBOX"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 
 // JI ladder for toss landings; sign of spin mirrors it downward (utonal).
