@@ -45,6 +45,18 @@ class Looper {
   void undoLayer()    { cmds_.fetch_or(kCmdUndo,   std::memory_order_release); }
   void clear()        { cmds_.fetch_or(kCmdClear,  std::memory_order_release); }
 
+  // FREEZE support: retroactively crystallize an external tape (e.g. the
+  // ambient EchoTape buffer) into this loop. First capture creates a loop of
+  // exactly `frames`; further captures of the SAME length merge as new
+  // layers (with an undo snapshot). Mismatched lengths are ignored. The
+  // source must stay valid and unwritten until the next process() call on
+  // the audio thread performs the copy (in the shared audio callback the
+  // echo has already finished its block, so the tape is stable).
+  void requestCapture(const int16_t* src, uint32_t frames) {
+    capLen_ = frames;
+    capSrc_.store(src, std::memory_order_release);
+  }
+
   // Loop playback level (0..1.5). Recording always captures the input dry;
   // this only scales what the loop adds to the output — turn it down to
   // leave headroom for playing over the loop.
@@ -106,6 +118,8 @@ class Looper {
   uint32_t max_ = 0;
 
   std::atomic<uint32_t> cmds_{0};
+  std::atomic<const int16_t*> capSrc_{nullptr};
+  uint32_t capLen_ = 0;
   std::atomic<float> level_{1.0f};
   std::atomic<float> rateTarget_{1.0f};
   float rate_ = 1.0f;   // audio-thread only, smoothed toward rateTarget_

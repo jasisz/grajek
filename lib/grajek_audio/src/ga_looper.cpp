@@ -46,6 +46,38 @@ void Looper::commitLayer() {
 }
 
 void Looper::applyCommands() {
+  // FREEZE capture: an external tape crystallizes into the loop
+  const int16_t* cap = capSrc_.exchange(nullptr, std::memory_order_acquire);
+  if (cap) {
+    const uint32_t frames = capLen_;
+    const State cs = state_.load(std::memory_order_relaxed);
+    if (cs == State::Empty && frames > 0 && frames <= max_) {
+      memcpy(mix_, cap, frames * sizeof(int16_t));
+      length_.store(frames);
+      pos_.store(0);
+      posF_ = 0.0;
+      layers_.store(1);
+      undoCount_.store(0);
+      undoHead_ = 0;
+      state_.store(State::Play);
+    } else if ((cs == State::Play || cs == State::Stopped ||
+                cs == State::Overdub) &&
+               frames == length_.load(std::memory_order_relaxed)) {
+      // merge as a retroactive layer, undo-able like any commit
+      if (undoDepth_ > 0) {
+        memcpy(undo_ + (size_t)undoHead_ * max_, mix_,
+               frames * sizeof(int16_t));
+        undoHead_ = (undoHead_ + 1) % undoDepth_;
+        const int uc = undoCount_.load(std::memory_order_relaxed);
+        if (uc < undoDepth_) undoCount_.store(uc + 1);
+      }
+      for (uint32_t i = 0; i < frames; ++i)
+        mix_[i] = satAdd(mix_[i], cap[i]);
+      layers_.fetch_add(1, std::memory_order_relaxed);
+    }
+    // any other combination (mid-RecordFirst, length mismatch): ignored
+  }
+
   const uint32_t c = cmds_.exchange(0, std::memory_order_acquire);
   if (!c) return;
   State s = state_.load(std::memory_order_relaxed);

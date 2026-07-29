@@ -70,6 +70,9 @@ EchoTape g_echo;   // always-on ambient memory: play anything, it comes back
 Reverb g_reverb;   // the single biggest "sounds pretty by itself" ingredient
 constexpr int kMaxLoopSec = 60;
 constexpr float kEchoSec = 4.0f;
+// the echo's raw tape, shared with the FREEZE capture
+int16_t* g_echoStorage = nullptr;
+uint32_t g_echoFrames = 0;
 
 // Tampura: a quiet 1/1 + 3/2 pedal under everything — random notes over a
 // root drone sound intentional. Follows toss modulations automatically
@@ -459,6 +462,8 @@ int main(int argc, char** argv) {
   g_looper.setPlaybackLevel(0.8f);  // leave headroom to play over the loop
 
   static std::vector<int16_t> echoBuf((size_t)(kEchoSec * kSr));
+  g_echoStorage = echoBuf.data();
+  g_echoFrames = (uint32_t)echoBuf.size();
   g_echo.init(echoBuf.data(), (uint32_t)echoBuf.size(), (float)kSr);
   g_echo.setFeedback(0.55f);  // each return ~5 dB quieter, ~4 audible repeats
   g_echo.setLevel(0.5f);
@@ -497,9 +502,12 @@ int main(int argc, char** argv) {
   printf("  grid: keyboard rows = instrument rows (bottom = lowest)\n");
   printf("  TAB scale | ` timbre | BACKSPACE octave | SHIFT+L latch (drony!)\n");
   printf("  arrows <- -> bend | up/down filter | ENTER panic+re-center | ESC quit\n");
-  printf("  LOOPER: SHIFT+R rec/close/overdub | SHIFT+P play/stop"
-         " | SHIFT+U undo | SHIFT+C clear\n"
-         "          SHIFT+[ / SHIFT+] loop volume (max %ds)\n", kMaxLoopSec);
+  printf("  FREEZE: SHIFT+F — to co teraz slychac staje sie PODLOGA (petla\n"
+         "          wstecz z pamieci echa; lata z rzutami, SHIFT+U cofa)\n");
+  printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
+         " play/stop\n"
+         "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
+         " (max %ds)\n", kMaxLoopSec);
   printf("  RZUT:   SPACE = wyrzut ... SPACE = chwyt (czas lotu -> szczebel JI)\n"
          "          strzalki W LOCIE = spin (-> w gore / <- w dol, wiecej = zawrot)\n"
          "          SHIFT+X = fuszerka (muzyka upada, tracisz warstwe)\n\n");
@@ -574,6 +582,16 @@ int main(int argc, char** argv) {
                      : (ui.wetBase <= 0.2f ? 0.35f
                         : (ui.wetBase <= 0.35f ? 0.55f : 0.0f));
         if (ui.wetBase <= 0.0f) g_reverb.setWet(0.0f);
+      } else if (c == 'F') {
+        // FREEZE: the last few seconds of the flowing memory crystallize
+        // retroactively into a persistent floor (it varispeeds with tosses,
+        // undoes like a layer); the echo then flows on above it. Capture
+        // runs on the audio thread next block; the tape is cleared shortly
+        // AFTER so the copy sees it intact.
+        g_looper.requestCapture(g_echoStorage, g_echoFrames);
+        schedule(0.08, [] { g_echo.clearTape(); });
+        printf("\n  >> FREEZE — ostatnie %.0f s pamieci staje sie podloga\n",
+               (double)kEchoSec);
       } else if (c == 'R') {
         g_looper.toggleRecord();
       } else if (c == 'P') {
