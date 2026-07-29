@@ -878,6 +878,81 @@ void fumble() {
          wasFlying ? " W LOCIE" : "");
 }
 
+// Measured verification of the ear, no singing required:
+//  A) injection path — a synthetic "voice" is pushed into the mic ring with
+//     the input DEVICE off; the session recorder measures the output: the
+//     voice must appear in the mix and must RETURN from the tape ~4 s later
+//  B) real hardware — the input queue is opened and we count whether the
+//     microphone actually delivers samples (permissions, device presence)
+int eartest() {
+  AudioQueueRef queue = nullptr;
+  if (!audioStart(&queue)) {
+    fprintf(stderr, "eartest: failed to open CoreAudio output\n");
+    return 1;
+  }
+  g_recIdx.store(0);
+  g_recOn.store(true);
+
+  auto rmsWindow = [&](uint32_t from, uint32_t to) {
+    const uint32_t end = g_recIdx.load() < to ? g_recIdx.load() : to;
+    double s = 0.0;
+    uint32_t n = 0;
+    for (uint32_t i = from; i < end && g_recBuf; ++i) {
+      const double v = (double)(*g_recBuf)[i] / 32768.0;
+      s += v * v;
+      ++n;
+    }
+    return n ? sqrt(s / (double)n) : 0.0;
+  };
+
+  // A) chain loopback
+  sleepMs(1000);  // baseline (no background applied in test mode: ~silence)
+  const uint32_t aEnd = g_recIdx.load();
+  g_earOpen.store(true);  // ear open, hardware input NOT started
+  float phase = 0.0f;
+  for (int chunk = 0; chunk < 50; ++chunk) {  // ~1 s of 440 Hz at voice level
+    float vb[1024];
+    for (int i = 0; i < 1024; ++i) {
+      vb[i] = 0.5f * sinf(phase);
+      phase += 2.0f * 3.14159265f * 440.0f / (float)kSr;
+    }
+    micPush(vb, 1024);
+    sleepMs(20);
+  }
+  g_earOpen.store(false);
+  const uint32_t bEnd = g_recIdx.load();
+  sleepMs(3600);  // wait for the tape to come back (4 s loop)
+  const uint32_t cStart = g_recIdx.load();
+  sleepMs(1200);
+  g_recOn.store(false);
+
+  const double baseline = rmsWindow(kSr / 2, aEnd);
+  const double voiced = rmsWindow(aEnd + kSr / 4, bEnd);
+  const double returned = rmsWindow(cStart, g_recIdx.load());
+  const bool okA = voiced > 0.02 && voiced > baseline * 3.0 &&
+                   returned > 0.003 && returned > baseline * 1.5;
+  printf("eartest A (tor iniekcji): baseline %.4f | glos %.4f |"
+         " powrot z tasmy %.4f -> %s\n",
+         baseline, voiced, returned,
+         okA ? "DZIALA" : "PROBLEM");
+
+  // B) real microphone
+  const uint32_t h0 = g_micHead.load();
+  const bool opened = earOpen();
+  sleepMs(1500);
+  const uint32_t got = g_micHead.load() - h0;
+  earClose();
+  printf("eartest B (sprzet): wejscie %s, probek z mikrofonu: %u %s\n",
+         opened ? "otwarte" : "NIE otwarte", got,
+         got > 0 ? "(mikrofon dostarcza dane)"
+                 : "(0 - brak uprawnien albo mikrofonu)");
+
+  if (g_inQueue) AudioQueueDispose(g_inQueue, true);
+  AudioQueueStop(queue, true);
+  AudioQueueDispose(queue, true);
+  return okA ? 0 : 1;
+}
+
 int selftest() {
   AudioQueueRef queue = nullptr;
   if (!audioStart(&queue)) {
@@ -930,6 +1005,7 @@ int main(int argc, char** argv) {
   g_echo.setLevel(0.5f);
 
   if (argc > 1 && strcmp(argv[1], "--selftest") == 0) return selftest();
+  if (argc > 1 && strcmp(argv[1], "--eartest") == 0) return eartest();
 
   if (!isatty(STDIN_FILENO)) {
     fprintf(stderr, "grajek_live needs a terminal (tty). Run without a pipe.\n");
