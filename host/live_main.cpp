@@ -55,6 +55,7 @@
 #include "ga_looper.h"
 #include "ga_reverb.h"
 #include "ga_scales.h"
+#include "wav_writer.h"
 
 using namespace ga;
 
@@ -92,6 +93,29 @@ struct Weather {
 };
 Weather g_weather;
 
+// Ghost garden: minutes-scale memory. After ~12 s of silence the box quietly
+// re-sows the player's own notes from the recent past (soft attack, low
+// velocity, sometimes transposed by a pure interval). The player's first
+// real key silences the ghosts immediately — it never fights the human.
+struct GhostGarden {
+  struct Mem { float cents; double t; };
+  static constexpr int kCap = 32;
+  Mem ring[kCap];
+  int head = 0, count = 0;
+  double lastInput = 0.0;
+  double nextAt = 0.0;
+  uint32_t activeMask = 0;  // which of the 4 ghost ids are sounding
+  int nextSlot = 0;
+};
+GhostGarden g_garden;
+constexpr int32_t kGhostIdBase = 1100;
+constexpr double kGhostIdleSec = 12.0;
+
+// Session recorder: the final mix (post-everything), armed with SHIFT+W.
+std::atomic<bool> g_recOn{false};
+std::atomic<uint32_t> g_recIdx{0};
+std::vector<int16_t>* g_recBuf = nullptr;
+
 void tampuraApply() {
   if (g_tampura) {
     g_engine.noteOn(kTampuraRootId, 0.0f, 0.22f);
@@ -126,6 +150,18 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
   g_looper.process(samples, samples, frames);
   // Reverb last, so the loop and echo sit in the same room.
   g_reverb.process(samples, frames);
+  // session recorder taps the very end of the chain
+  if (g_recOn.load(std::memory_order_relaxed) && g_recBuf) {
+    uint32_t w = g_recIdx.load(std::memory_order_relaxed);
+    const uint32_t cap = (uint32_t)g_recBuf->size();
+    for (int i = 0; i < frames && w < cap; ++i) {
+      float s = samples[i];
+      if (s > 1.0f) s = 1.0f;
+      if (s < -1.0f) s = -1.0f;
+      (*g_recBuf)[w++] = (int16_t)(s * 32767.0f);
+    }
+    g_recIdx.store(w, std::memory_order_relaxed);
+  }
   buf->mAudioDataByteSize = (UInt32)(frames * sizeof(float));
   AudioQueueEnqueueBuffer(q, buf, 0, nullptr);
 }
@@ -293,6 +329,64 @@ void weatherTick(const Ui& ui) {
   }
 }
 
+float rnd01f() { return (float)(rand() % 10000) * 0.0001f; }
+
+void gardenPush(float cents) {
+  g_garden.ring[g_garden.head] = {cents, nowSec()};
+  g_garden.head = (g_garden.head + 1) % GhostGarden::kCap;
+  if (g_garden.count < GhostGarden::kCap) ++g_garden.count;
+}
+
+void gardenSilenceGhosts() {
+  if (!g_garden.activeMask) return;
+  for (int i = 0; i < 4; ++i)
+    if (g_garden.activeMask & (1u << i)) g_engine.noteOff(kGhostIdBase + i);
+  g_garden.activeMask = 0;
+}
+
+double expDelay(double meanSec) {
+  return -meanSec * log(1.0 - 0.9999 * (double)rnd01f());
+}
+
+void gardenTick(const Ui& ui) {
+  const double now = nowSec();
+  if (now - g_garden.lastInput < kGhostIdleSec || g_garden.count == 0) {
+    g_garden.nextAt = 0.0;
+    return;
+  }
+  if (g_garden.nextAt == 0.0) {
+    g_garden.nextAt = now + 2.0 + expDelay(9.0);  // first ghost comes sooner
+    return;
+  }
+  if (now < g_garden.nextAt) return;
+  g_garden.nextAt = now + expDelay(12.0);
+
+  // pick a remembered note, biased toward the fresh end of the ring
+  const float u = rnd01f();
+  const int back = (int)(u * u * (float)(g_garden.count - 1));
+  const int idx =
+      (g_garden.head - 1 - back + 2 * GhostGarden::kCap) % GhostGarden::kCap;
+  float cents = g_garden.ring[idx].cents;
+  const float r = rnd01f();
+  if (r < 0.40f) { /* as played */ }
+  else if (r < 0.70f) cents += 1200.0f;  // octave up
+  else if (r < 0.85f) cents += 702.0f;   // pure fifth
+  else cents -= 498.0f;                  // fourth below
+  const float vel = 0.20f + 0.15f * rnd01f();
+
+  const int slot = g_garden.nextSlot++ & 3;
+  const int32_t id = kGhostIdBase + slot;
+  g_garden.activeMask |= (1u << slot);
+  // soft attack just for this note — the engine's event queue is FIFO and
+  // fully drained before each render, so this sequence is race-free
+  g_engine.setParam(Param::EnvAttack, 1.2f);
+  g_engine.noteOn(id, cents, vel);
+  g_engine.setParam(Param::EnvAttack, timbrePreset(ui.preset).attack);
+  const double hold = 2.0 + 2.5 * (double)rnd01f();
+  schedule(hold, [id] { g_engine.noteOff(id); });
+  printf("\n  ~ duch: %+.0f c\n", (double)cents);
+}
+
 const char* loopStateName(Looper::State s) {
   switch (s) {
     case Looper::State::Empty:       return "--";
@@ -324,6 +418,8 @@ void printStatus(const Ui& ui) {
   if (!g_echo.enabled()) printf(" echo:OFF");
   if (!g_tampura) printf(" tamb:OFF");
   if (g_reverb.wet() <= 0.0f) printf(" rev:OFF");
+  if (g_recOn.load(std::memory_order_relaxed))
+    printf(" REC:%.0fs", (double)g_recIdx.load() / kSr);
   if (g_sim.inFlight) {
     printf("  LOT %.2fs spin:%+d", nowSec() - g_sim.t0, g_sim.spin);
   } else if (g_sim.centerCents != 0.0f) {
@@ -465,6 +561,10 @@ int main(int argc, char** argv) {
   g_echoStorage = echoBuf.data();
   g_echoFrames = (uint32_t)echoBuf.size();
   g_echo.init(echoBuf.data(), (uint32_t)echoBuf.size(), (float)kSr);
+
+  // session recorder: up to 10 minutes of the final mix, armed with SHIFT+W
+  static std::vector<int16_t> recBuf((size_t)10 * 60 * kSr);
+  g_recBuf = &recBuf;
   g_echo.setFeedback(0.55f);  // each return ~5 dB quieter, ~4 audible repeats
   g_echo.setLevel(0.5f);
 
@@ -504,6 +604,8 @@ int main(int argc, char** argv) {
   printf("  arrows <- -> bend | up/down filter | ENTER panic+re-center | ESC quit\n");
   printf("  FREEZE: SHIFT+F — to co teraz slychac staje sie PODLOGA (petla\n"
          "          wstecz z pamieci echa; lata z rzutami, SHIFT+U cofa)\n");
+  printf("  DUCHY:  po ~12 s ciszy pudelko cicho dosiewa twoje wlasne nuty;\n"
+         "          pierwszy klawisz je ucisza | SHIFT+W nagrywa sesje do WAV\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
@@ -524,6 +626,9 @@ int main(int argc, char** argv) {
     if (b >= 0) {
       const char c = (char)b;
       KeyPos kp;
+      // any human input marks presence: sowing pauses, sounding ghosts bow out
+      g_garden.lastInput = nowSec();
+      gardenSilenceGhosts();
       if (c == 0x1B) {  // ESC alone, or an escape sequence
         const int c2 = readByte(40);
         if (c2 < 0) {
@@ -582,6 +687,22 @@ int main(int argc, char** argv) {
                      : (ui.wetBase <= 0.2f ? 0.35f
                         : (ui.wetBase <= 0.35f ? 0.55f : 0.0f));
         if (ui.wetBase <= 0.0f) g_reverb.setWet(0.0f);
+      } else if (c == 'W') {
+        if (!g_recOn.load(std::memory_order_relaxed)) {
+          g_recIdx.store(0);
+          g_recOn.store(true);
+          printf("\n  >> REC: nagrywam sesje (SHIFT+W konczy i zapisuje)\n");
+        } else {
+          g_recOn.store(false);
+          const uint32_t nrec = g_recIdx.load();
+          char path[64];
+          snprintf(path, sizeof path, "session_%ld.wav", (long)time(nullptr));
+          if (nrec > 0 && g_recBuf &&
+              writeWavMono16(path, g_recBuf->data(), nrec, kSr))
+            printf("\n  >> zapisane: %s (%.1f s)\n", path, (double)nrec / kSr);
+          else
+            printf("\n  >> nic nie nagrano\n");
+        }
       } else if (c == 'F') {
         // FREEZE: the last few seconds of the flowing memory crystallize
         // retroactively into a persistent floor (it varispeeds with tosses,
@@ -639,12 +760,14 @@ int main(int argc, char** argv) {
             st = NoteState{};
           } else {
             g_engine.noteOn(id, cents, vel);
+            gardenPush(cents);
             st.on = true;
             st.latched = true;
           }
         } else {
           // press/auto-repeat plays and extends; fades out 0.6 s later
           g_engine.noteOn(id, cents, vel);
+          if (!st.on) gardenPush(cents);  // remember presses, not auto-repeats
           st.on = true;
           st.latched = false;
           st.offAt = nowSec() + 0.6;
@@ -657,6 +780,7 @@ int main(int argc, char** argv) {
     if (g_sim.inFlight) flightUpdate(ui);
     runPending();
     weatherTick(ui);
+    gardenTick(ui);
 
     // keep the loop position / flight state on screen while idling
     const bool busy =
