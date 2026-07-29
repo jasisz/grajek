@@ -142,6 +142,22 @@ GhostGarden g_garden;
 constexpr int32_t kGhostIdBase = 1100;
 constexpr double kGhostIdleSec = 12.0;
 
+// Pulse entrainment: the box never imposes a tempo — it follows yours.
+// Regular playing (a few even intervals) summons a quiet MUSICBOX heartbeat
+// on the root, phase-anchored to YOUR presses; stop, or drift into rubato,
+// and it lets go within a few beats. The ghosts remember the last pulse.
+struct Pulse {
+  double onsets[8];
+  int count = 0;
+  double period = 0.0;
+  double nextBeatAt = 0.0;
+  double lastOnset = 0.0;
+  int beatsAlone = 0;
+  bool ticking = false;
+  double memory = 0.0;  // last stable period — the ghosts sow on this grid
+};
+Pulse g_pulse;
+
 // Session recorder: the final mix (post-everything), armed with SHIFT+W.
 std::atomic<bool> g_recOn{false};
 std::atomic<uint32_t> g_recIdx{0};
@@ -394,6 +410,65 @@ void gardenPush(float cents) {
   if (g_garden.count < GhostGarden::kCap) ++g_garden.count;
 }
 
+void pulseOnOnset() {
+  const double t = nowSec();
+  Pulse& p = g_pulse;
+  if (p.count < 8) {
+    p.onsets[p.count++] = t;
+  } else {
+    memmove(p.onsets, p.onsets + 1, 7 * sizeof(double));
+    p.onsets[7] = t;
+  }
+  p.lastOnset = t;
+  double ioi[7];
+  int n = 0;
+  for (int i = 1; i < p.count; ++i) {
+    const double d = p.onsets[i] - p.onsets[i - 1];
+    if (d > 0.18 && d < 2.0) ioi[n++] = d;
+  }
+  if (n < 3) return;
+  const int m = n < 5 ? n : 5;  // judge the last few intervals
+  double w[5];
+  for (int i = 0; i < m; ++i) w[i] = ioi[n - m + i];
+  for (int i = 1; i < m; ++i) {  // insertion sort
+    const double v = w[i];
+    int j = i;
+    while (j > 0 && w[j - 1] > v) { w[j] = w[j - 1]; --j; }
+    w[j] = v;
+  }
+  const double med = w[m / 2];
+  int good = 0;
+  for (int i = 0; i < m; ++i)
+    if (fabs(w[i] - med) < 0.15 * med) ++good;
+  if (good >= m - 1) {
+    p.period = p.ticking ? 0.7 * p.period + 0.3 * med : med;
+    p.memory = p.period;
+    p.nextBeatAt = t + p.period;  // the beat re-anchors to YOUR press
+    p.beatsAlone = 0;
+    p.ticking = true;
+  }
+}
+
+void pulseTick() {
+  Pulse& p = g_pulse;
+  if (!p.ticking) return;
+  const double now = nowSec();
+  if (now < p.nextBeatAt) return;
+  if (now - p.lastOnset > p.period * 1.5) ++p.beatsAlone;
+  const float fade = 1.0f - (float)p.beatsAlone / 6.0f;
+  if (fade <= 0.0f) {
+    p.ticking = false;
+    p.count = 0;
+    return;
+  }
+  // a soft heartbeat on the root — MUSICBOX ends by itself, no note-off
+  g_engine.setParam(Param::TimbrePreset, 4.0f);
+  g_engine.noteOn(1300, 0.0f, 0.16f * fade);
+  g_engine.setParam(Param::TimbrePreset, (float)g_uiPreset);
+  p.nextBeatAt += p.period;
+  while (p.nextBeatAt < now) p.nextBeatAt += p.period;  // never spiral
+}
+
 void gardenSilenceGhosts() {
   if (!g_garden.activeMask) return;
   for (int i = 0; i < 4; ++i)
@@ -417,6 +492,12 @@ void gardenTick(const Ui& ui) {
   }
   if (now < g_garden.nextAt) return;
   g_garden.nextAt = now + expDelay(12.0);
+  // the ghosts remember your last pulse: sowing snaps to that beat grid
+  if (g_pulse.memory > 0.15) {
+    const double k =
+        round((g_garden.nextAt - g_pulse.lastOnset) / g_pulse.memory);
+    g_garden.nextAt = g_pulse.lastOnset + k * g_pulse.memory;
+  }
 
   // pick a remembered note, biased toward the fresh end of the ring
   const float u = rnd01f();
@@ -472,6 +553,8 @@ void printStatus(const Ui& ui) {
            (float)g_looper.lengthFrames() / kSr,
            g_looper.playbackLevel() * 100.0f);
   }
+  if (g_pulse.ticking)
+    printf(" puls:%d", (int)(60.0 / g_pulse.period + 0.5));
   if (g_harmony) printf(" harm:ON");
   if (!g_echo.enabled()) printf(" echo:OFF");
   if (!g_tampura) printf(" tamb:OFF");
@@ -738,6 +821,8 @@ int main(int argc, char** argv) {
          "          (max 4, klik drugi raz usuwa) | SHIFT+S struny sympatyczne\n");
   printf("  SHIFT+H cien harmoniczny (rzad wyzej gra cicho z toba — w PENTA\n"
          "          to tercje) | dusza: stan i wspomnienia w grajek_soul.txt\n");
+  printf("  PULS:   graj rowno kilka nut, a dolaczy ciche serce w TWOIM\n"
+         "          tempie; przestan albo plyn rubato — samo puszcza\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
@@ -939,6 +1024,7 @@ int main(int argc, char** argv) {
             g_engine.noteOn(id, cents, vel);
             if (g_harmony) g_engine.noteOn(id + 64, hCents, vel * 0.45f);
             gardenPush(cents);
+            pulseOnOnset();
             st.on = true;
             st.latched = true;
           }
@@ -946,7 +1032,10 @@ int main(int argc, char** argv) {
           // press/auto-repeat plays and extends; fades out 0.6 s later
           g_engine.noteOn(id, cents, vel);
           if (g_harmony) g_engine.noteOn(id + 64, hCents, vel * 0.45f);
-          if (!st.on) gardenPush(cents);  // remember presses, not auto-repeats
+          if (!st.on) {
+            gardenPush(cents);  // remember presses, not auto-repeats
+            pulseOnOnset();
+          }
           st.on = true;
           st.latched = false;
           st.offAt = nowSec() + 0.6;
@@ -960,6 +1049,7 @@ int main(int argc, char** argv) {
     runPending();
     weatherTick(ui);
     gardenTick(ui);
+    pulseTick();
 
     // keep the loop position / flight state on screen while idling
     const bool busy =
