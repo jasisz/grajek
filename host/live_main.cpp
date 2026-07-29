@@ -221,38 +221,58 @@ void earInCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf,
 }
 
 bool earOpen() {
-  if (!g_inQueue) {  // lazy: the mic permission prompt appears on first use
-    AudioStreamBasicDescription fmt = {};
-    fmt.mSampleRate = kSr;
-    fmt.mFormatID = kAudioFormatLinearPCM;
-    fmt.mFormatFlags =
-        kLinearPCMFormatFlagIsFloat | kLinearPCMFormatFlagIsPacked;
-    fmt.mChannelsPerFrame = 1;
-    fmt.mBitsPerChannel = 32;
-    fmt.mBytesPerFrame = 4;
-    fmt.mFramesPerPacket = 1;
-    fmt.mBytesPerPacket = 4;
-    if (AudioQueueNewInput(&fmt, earInCallback, nullptr, nullptr, nullptr, 0,
-                           &g_inQueue) != noErr)
+  // A FRESH queue every time: stopping an input queue hands its buffers
+  // back to the callback, whose re-enqueue silently fails during the reset
+  // (-66632) — a reused queue restarts with no buffers and the ear is deaf
+  // from the second opening on. Creation is milliseconds; the permission
+  // prompt only ever appears once.
+  if (g_inQueue) {
+    AudioQueueDispose(g_inQueue, true);
+    g_inQueue = nullptr;
+  }
+  AudioStreamBasicDescription fmt = {};
+  fmt.mSampleRate = kSr;
+  fmt.mFormatID = kAudioFormatLinearPCM;
+  fmt.mFormatFlags =
+      kLinearPCMFormatFlagIsFloat | kLinearPCMFormatFlagIsPacked;
+  fmt.mChannelsPerFrame = 1;
+  fmt.mBitsPerChannel = 32;
+  fmt.mBytesPerFrame = 4;
+  fmt.mFramesPerPacket = 1;
+  fmt.mBytesPerPacket = 4;
+  if (AudioQueueNewInput(&fmt, earInCallback, nullptr, nullptr, nullptr, 0,
+                         &g_inQueue) != noErr) {
+    g_inQueue = nullptr;
+    return false;
+  }
+  for (int i = 0; i < 3; ++i) {
+    AudioQueueBufferRef b = nullptr;
+    if (AudioQueueAllocateBuffer(g_inQueue, 1024 * sizeof(float), &b) !=
+        noErr) {
+      AudioQueueDispose(g_inQueue, true);
+      g_inQueue = nullptr;
       return false;
-    for (int i = 0; i < 3; ++i) {
-      AudioQueueBufferRef b = nullptr;
-      if (AudioQueueAllocateBuffer(g_inQueue, 1024 * sizeof(float), &b) !=
-          noErr)
-        return false;
-      AudioQueueEnqueueBuffer(g_inQueue, b, 0, nullptr);
     }
+    AudioQueueEnqueueBuffer(g_inQueue, b, 0, nullptr);
   }
   g_micHead.store(0);
   g_micTail.store(0);
-  if (AudioQueueStart(g_inQueue, nullptr) != noErr) return false;
+  if (AudioQueueStart(g_inQueue, nullptr) != noErr) {
+    AudioQueueDispose(g_inQueue, true);
+    g_inQueue = nullptr;
+    return false;
+  }
   g_earOpen.store(true);
   return true;
 }
 
 void earClose() {
   g_earOpen.store(false);
-  if (g_inQueue) AudioQueueStop(g_inQueue, true);
+  if (g_inQueue) {
+    AudioQueueStop(g_inQueue, true);
+    AudioQueueDispose(g_inQueue, true);
+    g_inQueue = nullptr;
+  }
 }
 
 void backgroundApply() {
@@ -936,18 +956,23 @@ int eartest() {
          baseline, voiced, returned,
          okA ? "DZIALA" : "PROBLEM");
 
-  // B) real microphone
-  const uint32_t h0 = g_micHead.load();
-  const bool opened = earOpen();
-  sleepMs(1500);
-  const uint32_t got = g_micHead.load() - h0;
-  earClose();
-  printf("eartest B (sprzet): wejscie %s, probek z mikrofonu: %u %s\n",
-         opened ? "otwarte" : "NIE otwarte", got,
-         got > 0 ? "(mikrofon dostarcza dane)"
-                 : "(0 - brak uprawnien albo mikrofonu)");
+  // B) real microphone — TWO open/close cycles, because a reused queue used
+  // to go deaf from the second opening on
+  bool okB = true;
+  for (int cycle = 1; cycle <= 2; ++cycle) {
+    const bool opened = earOpen();  // resets the ring counters
+    const uint32_t h0 = g_micHead.load();
+    sleepMs(1500);
+    const uint32_t got = g_micHead.load() - h0;
+    earClose();
+    printf("eartest B cykl %d: wejscie %s, probek z mikrofonu: %u %s\n",
+           cycle, opened ? "otwarte" : "NIE otwarte", got,
+           got > 0 ? "(plynie)" : "(GLUCHE)");
+    okB = okB && opened && got > 0;
+    sleepMs(300);
+  }
+  printf("eartest B -> %s\n", okB ? "DZIALA (oba cykle)" : "PROBLEM");
 
-  if (g_inQueue) AudioQueueDispose(g_inQueue, true);
   AudioQueueStop(queue, true);
   AudioQueueDispose(queue, true);
   return okA ? 0 : 1;
@@ -1361,10 +1386,7 @@ int main(int argc, char** argv) {
   }
   allOff();
   sleepMs(150);  // let the release tail ring before closing the queue
-  if (g_inQueue) {
-    earClose();
-    AudioQueueDispose(g_inQueue, true);
-  }
+  earClose();    // disposes the input queue if one exists
   AudioQueueStop(queue, true);
   AudioQueueDispose(queue, true);
   tcsetattr(STDIN_FILENO, TCSANOW, &orig);
