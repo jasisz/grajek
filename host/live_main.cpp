@@ -141,6 +141,10 @@ struct GhostGarden {
 GhostGarden g_garden;
 constexpr int32_t kGhostIdBase = 1100;
 constexpr double kGhostIdleSec = 12.0;
+// Cat, not Furby: the box never solicits play. Ghosts may only CONTINUE a
+// session the human started — with soul-loaded memories the garden is full
+// at boot, and without this gate it would start singing on its own.
+bool g_playedThisSession = false;
 
 // Pulse entrainment: the box never imposes a tempo — it follows yours.
 // Regular playing (a few even intervals) summons a quiet MUSICBOX heartbeat
@@ -411,6 +415,7 @@ void weatherTick(const Ui& ui) {
 float rnd01f() { return (float)(rand() % 10000) * 0.0001f; }
 
 void gardenPush(float cents) {
+  g_playedThisSession = true;
   g_garden.ring[g_garden.head] = {cents, nowSec()};
   g_garden.head = (g_garden.head + 1) % GhostGarden::kCap;
   if (g_garden.count < GhostGarden::kCap) ++g_garden.count;
@@ -531,6 +536,7 @@ double expDelay(double meanSec) {
 }
 
 void gardenTick(const Ui& ui) {
+  if (!g_playedThisSession) return;  // ghosts continue sessions, never start them
   const double now = nowSec();
   if (now - g_garden.lastInput < kGhostIdleSec || g_garden.count == 0) {
     g_garden.nextAt = 0.0;
