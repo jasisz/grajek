@@ -2,5 +2,7 @@
 .venv/
 host/build/
 host/out/
+host/grajek_soul.txt
+host/session_*.wav
 .vscode/
 .DS_Store

@@ -72,6 +72,15 @@ EchoTape g_echo;   // always-on ambient memory: play anything, it comes back
 Reverb g_reverb;   // the single biggest "sounds pretty by itself" ingredient
 constexpr int kMaxLoopSec = 60;
 constexpr float kEchoSec = 4.0f;
+
+// Reich drift — a personal dedication wired into the architecture: the loop
+// runs 0.25% fast, so a frozen floor slowly creeps against your pulse and
+// the echo's memory, "It's Gonna Rain"-style. Inaudible at first, audible
+// over minutes. Set to 1.0f to turn the homage off.
+constexpr float kReichDrift = 1.0025f;
+void setLoopRate(float r) { g_looper.setRate(r * kReichDrift); }
+
+bool g_harmony = false;  // SHIFT+H: a quiet harmonic shadow one row above
 // the echo's raw tape, shared with the FREEZE capture
 int16_t* g_echoStorage = nullptr;
 uint32_t g_echoFrames = 0;
@@ -88,6 +97,19 @@ BgNote g_bg[4] = {{0.0f, 1000}, {702.0f, 1001}, {0.0f, -1}, {0.0f, -1}};
 int g_bgCount = 2;
 bool g_bgCustom = false;   // a hand-picked background silences the weather vote
 int32_t g_bgNextId = 2;    // rotates through ids 1000..1015
+
+// The background has its OWN timbre (DRONE), independent of what the player
+// plays with — a percussive preset (MUSICBOX, sustain 0) used to silently
+// kill the drone, which made picking a background look broken. The engine
+// queue is FIFO with a single producer, so the sandwich is race-free.
+constexpr int kBgPreset = 1;  // DRONE
+int g_uiPreset = 3;           // what the player's keys currently use
+
+void bgNoteOn(int32_t id, float cents, float vel) {
+  g_engine.setParam(Param::TimbrePreset, (float)kBgPreset);
+  g_engine.noteOn(id, cents, vel);
+  g_engine.setParam(Param::TimbrePreset, (float)g_uiPreset);
+}
 
 SympatheticStrings g_strings;  // JI halo around everything (SHIFT+S toggles)
 
@@ -128,7 +150,7 @@ std::vector<int16_t>* g_recBuf = nullptr;
 void backgroundApply() {
   for (int i = 0; i < g_bgCount; ++i) {
     if (g_tampura)
-      g_engine.noteOn(g_bg[i].id, g_bg[i].cents, i == 0 ? 0.22f : 0.16f);
+      bgNoteOn(g_bg[i].id, g_bg[i].cents, i == 0 ? 0.22f : 0.16f);
     else
       g_engine.noteOff(g_bg[i].id);
   }
@@ -155,8 +177,7 @@ void backgroundToggleNote(float cents) {
   const int32_t id = 1000 + (g_bgNextId++ & 15);
   g_bg[g_bgCount] = {cents, id};
   ++g_bgCount;
-  if (g_tampura)
-    g_engine.noteOn(id, cents, g_bgCount == 1 ? 0.22f : 0.16f);
+  if (g_tampura) bgNoteOn(id, cents, g_bgCount == 1 ? 0.22f : 0.16f);
 }
 
 // Ctrl+C must go through the cleanup path (restore termios, stop the queue),
@@ -360,7 +381,7 @@ void weatherTick(const Ui& ui) {
       g_engine.noteOff(g_bg[1].id);
       g_bg[1].cents = want ? 968.8f : 702.0f;
       g_bg[1].id = 1000 + (g_bgNextId++ & 15);
-      g_engine.noteOn(g_bg[1].id, g_bg[1].cents, want ? 0.14f : 0.16f);
+      bgNoteOn(g_bg[1].id, g_bg[1].cents, want ? 0.14f : 0.16f);
     }
   }
 }
@@ -451,6 +472,7 @@ void printStatus(const Ui& ui) {
            (float)g_looper.lengthFrames() / kSr,
            g_looper.playbackLevel() * 100.0f);
   }
+  if (g_harmony) printf(" harm:ON");
   if (!g_echo.enabled()) printf(" echo:OFF");
   if (!g_tampura) printf(" tamb:OFF");
   if (!g_strings.enabled()) printf(" str:OFF");
@@ -470,6 +492,72 @@ void printStatus(const Ui& ui) {
 void allOff() {
   g_engine.allNotesOff();
   for (auto& n : g_notes) n = NoteState{};
+}
+
+// --- the soul: grajek remembers you across sessions ---
+// Saved on exit, loaded on start: your scale, timbre, octave, room, the
+// background chord you picked and the ghost garden's memories. The box you
+// taught yesterday is the box you pick up today.
+const char* kSoulPath = "grajek_soul.txt";
+
+void soulSave(const Ui& ui) {
+  FILE* f = fopen(kSoulPath, "w");
+  if (!f) return;
+  fprintf(f, "grajek-soul 1\n");
+  fprintf(f, "scale %d preset %d octave %d wet %.3f\n", ui.scale, ui.preset,
+          ui.octave, (double)ui.wetBase);
+  fprintf(f, "bg %d %d", g_bgCustom ? 1 : 0, g_bgCount);
+  for (int i = 0; i < g_bgCount; ++i)
+    fprintf(f, " %.2f", (double)g_bg[i].cents);
+  fprintf(f, "\ngarden %d", g_garden.count);
+  for (int i = 0; i < g_garden.count; ++i) {
+    const int idx = (g_garden.head - g_garden.count + i +
+                     2 * GhostGarden::kCap) % GhostGarden::kCap;
+    fprintf(f, " %.2f", (double)g_garden.ring[idx].cents);
+  }
+  fprintf(f, "\n");
+  fclose(f);
+}
+
+bool soulLoad(Ui& ui) {
+  FILE* f = fopen(kSoulPath, "r");
+  if (!f) return false;
+  bool ok = false;
+  char tag[32];
+  int ver = 0, scale = 0, preset = 0, octave = 0, bgCustom = 0, bgCount = 0;
+  float wet = 0.35f;
+  if (fscanf(f, "%31s %d", tag, &ver) == 2 &&
+      strcmp(tag, "grajek-soul") == 0 && ver == 1 &&
+      fscanf(f, " scale %d preset %d octave %d wet %f", &scale, &preset,
+             &octave, &wet) == 4 &&
+      fscanf(f, " bg %d %d", &bgCustom, &bgCount) == 2 && bgCount >= 0 &&
+      bgCount <= 4) {
+    if (scale >= 0 && scale < (int)ScaleId::Count) ui.scale = scale;
+    if (preset >= 0 && preset < kNumTimbrePresets) ui.preset = preset;
+    if (octave >= 0 && octave < 4) ui.octave = octave;
+    ui.wetBase = clampf(wet, 0.0f, 0.6f);
+    int n = 0;
+    for (int i = 0; i < bgCount; ++i) {
+      float c;
+      if (fscanf(f, " %f", &c) == 1) g_bg[n++] = {c, 1000 + i};
+    }
+    g_bgCount = n;
+    g_bgNextId = n;
+    g_bgCustom = bgCustom != 0;
+    int gc = 0;
+    if (fscanf(f, " garden %d", &gc) == 1 && gc > 0 &&
+        gc <= GhostGarden::kCap) {
+      int m = 0;
+      float c;
+      while (m < gc && fscanf(f, " %f", &c) == 1)
+        g_garden.ring[m++] = {c, nowSec()};
+      g_garden.count = m;
+      g_garden.head = m % GhostGarden::kCap;
+    }
+    ok = true;
+  }
+  fclose(f);
+  return ok;
 }
 
 void sleepMs(int ms) {
@@ -501,7 +589,7 @@ void flightUpdate(const Ui& ui) {
   const float wob =
       (float)g_sim.spin * 14.0f * sinf((float)(2.0 * 3.14159265 * 5.5 * t));
   g_engine.setParam(Param::BendCents, alt + wob);
-  g_looper.setRate(g_sim.rateBase * exp2f(alt / 1200.0f));
+  setLoopRate(g_sim.rateBase * exp2f(alt / 1200.0f));
   (void)ui;
 }
 
@@ -510,7 +598,7 @@ void land(Ui& ui) {
   g_sim.inFlight = false;
   if (t < 0.15) {  // too short to count as a throw
     g_engine.setParam(Param::BendCents, 0.0f);
-    g_looper.setRate(g_sim.rateBase);
+    setLoopRate(g_sim.rateBase);
     printf("\n  >> za krotki lot — nic sie nie stalo\n");
     return;
   }
@@ -522,7 +610,7 @@ void land(Ui& ui) {
   applyCenter(ui);
   g_sim.rateBase = clampf(g_sim.rateBase * exp2f(landCents / 1200.0f),
                           0.25f, 4.0f);
-  g_looper.setRate(g_sim.rateBase);
+  setLoopRate(g_sim.rateBase);
   g_engine.setParam(Param::BendCents, 0.0f);
 
   // dizziness: the more spin, the more the landing wobbles before settling
@@ -548,10 +636,10 @@ void fumble() {
   // (An earlier version dropped the top layer here: punishing the player
   // fights the whole point of the instrument — every gesture should be safe.)
   g_engine.setParam(Param::BendCents, -350.0f);
-  g_looper.setRate(clampf(g_sim.rateBase * 0.3f, 0.1f, 4.0f));
+  setLoopRate(clampf(g_sim.rateBase * 0.3f, 0.1f, 4.0f));
   schedule(0.35, [] {
     g_engine.setParam(Param::BendCents, 0.0f);
-    g_looper.setRate(g_sim.rateBase);
+    setLoopRate(g_sim.rateBase);
   });
   printf("\n  >> FUSZERKA%s — taśma sie potkna, muzyka przezywa\n",
          wasFlying ? " W LOCIE" : "");
@@ -648,6 +736,8 @@ int main(int argc, char** argv) {
          "          pierwszy klawisz je ucisza | SHIFT+W nagrywa sesje do WAV\n");
   printf("  TLO:    SHIFT+D i klikasz nuty = wybierasz wlasny dron pod spodem\n"
          "          (max 4, klik drugi raz usuwa) | SHIFT+S struny sympatyczne\n");
+  printf("  SHIFT+H cien harmoniczny (rzad wyzej gra cicho z toba — w PENTA\n"
+         "          to tercje) | dusza: stan i wspomnienia w grajek_soul.txt\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
@@ -657,10 +747,31 @@ int main(int argc, char** argv) {
          "          SHIFT+X = fuszerka (muzyka upada, tracisz warstwe)\n\n");
 
   Ui ui;
+  const bool soulLoaded = soulLoad(ui);
+  if (soulLoaded) {
+    g_uiPreset = ui.preset;
+    g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
+    applyCenter(ui);  // octave from the soul
+  }
   g_weather.start = nowSec();
   backgroundApply();
   printStatus(ui);
   double lastStatusAt = nowSec();
+  if (soulLoaded) {
+    printf("\n  (pamietam cie: tlo %d nut, %d wspomnien z poprzedniej"
+           " sesji)\n", g_bgCount, g_garden.count);
+    if (g_garden.count > 0) {
+      // it greets you with one of your own notes from last time
+      schedule(2.5, [&ui] {
+        const int last =
+            (g_garden.head - 1 + GhostGarden::kCap) % GhostGarden::kCap;
+        g_engine.setParam(Param::EnvAttack, 1.0f);
+        g_engine.noteOn(1198, g_garden.ring[last].cents, 0.3f);
+        g_engine.setParam(Param::EnvAttack, timbrePreset(ui.preset).attack);
+        schedule(2.2, [] { g_engine.noteOff(1198); });
+      });
+    }
+  }
 
   while (g_running) {
     const int b = readByte(0);
@@ -711,12 +822,15 @@ int main(int argc, char** argv) {
         backgroundApply();
       } else if (c == '`') {
         ui.preset = (ui.preset + 1) % kNumTimbrePresets;
+        g_uiPreset = ui.preset;
         g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
       } else if (c == 0x7F || c == 0x08) {  // backspace
         ui.octave = (ui.octave + 1) % 4;
         applyCenter(ui);
       } else if (c == 'L') {
         ui.latch = !ui.latch;
+      } else if (c == 'H') {
+        g_harmony = !g_harmony;
       } else if (c == 'E') {
         g_echo.setEnabled(!g_echo.enabled());
       } else if (c == 'T') {
@@ -779,7 +893,7 @@ int main(int argc, char** argv) {
         g_sim.inFlight = false;
         g_sim.centerCents = 0.0f;
         g_sim.rateBase = 1.0f;
-        g_looper.setRate(1.0f);
+        setLoopRate(1.0f);
         ui.bend = 0.0f;
         g_engine.setParam(Param::BendCents, 0.0f);
         applyCenter(ui);
@@ -796,7 +910,7 @@ int main(int argc, char** argv) {
         g_sim.centerCents = 0.0f;
         g_sim.rateBase = 1.0f;
         g_engine.setParam(Param::BendCents, 0.0f);
-        g_looper.setRate(1.0f);
+        setLoopRate(1.0f);
         applyCenter(ui);
         backgroundApply();
       } else if (keyToGrid(c, kp)) {
@@ -812,12 +926,18 @@ int main(int argc, char** argv) {
         // humanized dynamics — identical velocities sound mechanical
         const float vel = 0.55f + 0.35f * (float)(rand() % 1000) / 1000.0f;
         NoteState& st = g_notes[id];
+        // harmonic shadow: the key one row above plays along quietly —
+        // with rows stacked in thirds (PENTA/MAJOR) that is a real harmony
+        const int hRow = kp.row < 3 ? kp.row + 1 : kp.row - 1;
+        const float hCents = gridToCents((ScaleId)ui.scale, kp.col, hRow);
         if (ui.latch) {
           if (st.on) {
             g_engine.noteOff(id);
+            g_engine.noteOff(id + 64);
             st = NoteState{};
           } else {
             g_engine.noteOn(id, cents, vel);
+            if (g_harmony) g_engine.noteOn(id + 64, hCents, vel * 0.45f);
             gardenPush(cents);
             st.on = true;
             st.latched = true;
@@ -825,6 +945,7 @@ int main(int argc, char** argv) {
         } else {
           // press/auto-repeat plays and extends; fades out 0.6 s later
           g_engine.noteOn(id, cents, vel);
+          if (g_harmony) g_engine.noteOn(id + 64, hCents, vel * 0.45f);
           if (!st.on) gardenPush(cents);  // remember presses, not auto-repeats
           st.on = true;
           st.latched = false;
@@ -853,6 +974,7 @@ int main(int argc, char** argv) {
     for (int id = 0; id < 64; ++id) {
       if (g_notes[id].on && !g_notes[id].latched && g_notes[id].offAt <= t) {
         g_engine.noteOff(id);
+        g_engine.noteOff(id + 64);  // the harmonic shadow follows
         g_notes[id].on = false;
       }
     }
@@ -860,6 +982,17 @@ int main(int argc, char** argv) {
     sleepMs(8);  // ~125 Hz tick: smooth flight, negligible input latency
   }
 
+  soulSave(ui);
+  if (g_garden.count > 0) {
+    // goodnight: it hums your last remembered note as it falls asleep
+    const int last =
+        (g_garden.head - 1 + GhostGarden::kCap) % GhostGarden::kCap;
+    g_engine.setParam(Param::EnvAttack, 0.12f);
+    g_engine.noteOn(1199, g_garden.ring[last].cents, 0.25f);
+    sleepMs(500);
+    g_engine.noteOff(1199);
+    sleepMs(300);
+  }
   allOff();
   sleepMs(150);  // let the release tail ring before closing the queue
   AudioQueueStop(queue, true);

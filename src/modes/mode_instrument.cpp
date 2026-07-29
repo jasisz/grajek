@@ -36,7 +36,7 @@ void ModeInstrument::applyRoot(ModeCtx& ctx) {
 
 void ModeInstrument::enter(ModeCtx& ctx) {
   ctx.engine.setParam(Param::TimbrePreset, (float)preset_);
-  ambient::setPresetAttack(timbrePreset(preset_).attack);
+  ambient::setPreset(preset_);
   applyRoot(ctx);
   ambient::setCutoffBase(kNeutralCutoff);
   ctx.engine.setParam(Param::BendCents, 0.0f);
@@ -84,7 +84,7 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
       case 1:
         preset_ = (preset_ + 1) % kNumTimbrePresets;
         ctx.engine.setParam(Param::TimbrePreset, (float)preset_);
-        ambient::setPresetAttack(timbrePreset(preset_).attack);
+        ambient::setPreset(preset_);
         break;
       case 2:
         imuRole_ = (ImuRole)(((int)imuRole_ + 1) % 3);

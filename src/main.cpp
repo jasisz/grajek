@@ -93,7 +93,7 @@ void setup() {
   // the ambient brain: background chord, weather, ghost garden — alive from
   // boot, in the menu too (the box hums the moment it wakes up)
   ambient::init(&engine);
-  ambient::setPresetAttack(ga::timbrePreset(3).attack);
+  ambient::setPreset(3);
 
   input::keysInit();
   lastTickMs = millis();

@@ -39,6 +39,9 @@ struct PendingOff { uint32_t atMs; int32_t id; };
 PendingOff s_pending[6];
 int s_pendingCount = 0;
 
+int s_uiPreset = 3;           // what the player's keys currently use
+constexpr int kBgPreset = 1;  // the background always speaks DRONE
+
 uint32_t s_rng = 1;
 float rnd01() {
   s_rng ^= s_rng << 13;
@@ -51,10 +54,17 @@ uint32_t expDelayMs(float meanMs) {
   return (uint32_t)(-meanMs * logf(1.0f - 0.9999f * rnd01()));
 }
 
+void bgNoteOn(int32_t id, float cents, float vel) {
+  // timbre sandwich: FIFO queue, single producer — race-free
+  s_engine->setParam(ga::Param::TimbrePreset, (float)kBgPreset);
+  s_engine->noteOn(id, cents, vel);
+  s_engine->setParam(ga::Param::TimbrePreset, (float)s_uiPreset);
+}
+
 void backgroundApplyAll() {
   for (int i = 0; i < s_bgCount; ++i) {
     if (s_bgOn)
-      s_engine->noteOn(s_bg[i].id, s_bg[i].cents, i == 0 ? 0.22f : 0.16f);
+      bgNoteOn(s_bg[i].id, s_bg[i].cents, i == 0 ? 0.22f : 0.16f);
     else
       s_engine->noteOff(s_bg[i].id);
   }
@@ -92,7 +102,7 @@ void weatherTick(uint32_t nowMs) {
       s_engine->noteOff(s_bg[1].id);
       s_bg[1].cents = want ? 968.8f : 702.0f;
       s_bg[1].id = 1000 + (s_bgNextId++ & 15);
-      s_engine->noteOn(s_bg[1].id, s_bg[1].cents, want ? 0.14f : 0.16f);
+      bgNoteOn(s_bg[1].id, s_bg[1].cents, want ? 0.14f : 0.16f);
     }
   }
 }
@@ -196,7 +206,7 @@ void backgroundToggleNote(float cents) {
   const int32_t id = 1000 + (s_bgNextId++ & 15);
   s_bg[s_bgCount] = {cents, id};
   ++s_bgCount;
-  if (s_bgOn) s_engine->noteOn(id, cents, s_bgCount == 1 ? 0.22f : 0.16f);
+  if (s_bgOn) bgNoteOn(id, cents, s_bgCount == 1 ? 0.22f : 0.16f);
 }
 
 void backgroundSetEnabled(bool on) {
@@ -207,6 +217,12 @@ bool backgroundEnabled() { return s_bgOn; }
 int backgroundCount() { return s_bgCount; }
 
 void setCutoffBase(float hz) { s_cutoffBase = ga::clampf(hz, 300.0f, 12000.0f); }
-void setPresetAttack(float sec) { s_presetAttack = sec; }
+
+void setPreset(int idx) {
+  if (idx < 0) idx = 0;
+  if (idx >= ga::kNumTimbrePresets) idx = ga::kNumTimbrePresets - 1;
+  s_uiPreset = idx;
+  s_presetAttack = ga::timbrePreset(idx).attack;
+}
 
 }  // namespace ambient

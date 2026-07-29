@@ -24,7 +24,9 @@ int backgroundCount();
 
 // bases the weather drifts around
 void setCutoffBase(float hz);
-// the engine's current attack — ghosts restore it after their soft attack
-void setPresetAttack(float sec);
+// the player's current preset index: ghosts play with it, while the
+// background keeps its own DRONE timbre (via a FIFO queue sandwich —
+// a percussive player preset must not silently kill the drone)
+void setPreset(int idx);
 
 }  // namespace ambient
