@@ -14,7 +14,9 @@ namespace ga {
 struct VoiceSample {
   const int16_t* data;
   uint32_t frames;
-  float rootHz;  // detected fundamental of the grain
+  float rootHz;        // detected fundamental of the grain
+  float periodFrames;  // source pitch period in samples; > 0 enables the
+                       // formant-preserving PSOLA mode (no chipmunk)
 };
 
 struct Timbre {
@@ -78,6 +80,13 @@ class Voice {
   float detLimit_ = 0.3f;
   const VoiceSample* smp_ = nullptr;  // non-null = play the sample instead
   float smpPos_ = 0.0f;
+  // PSOLA state: up to 3 overlapping pitch-synchronous grains
+  float gsStart_[3] = {0.0f};  // source anchor of each flying grain
+  float gsPos_[3] = {0.0f};    // position inside the grain window
+  bool gsOn_[3] = {false};
+  int gsNext_ = 0;
+  float outCount_ = 0.0f;  // samples until the next grain launch
+  float srcScan_ = 0.0f;   // slow scan through the source material
   float cents_ = 0.0f;
   float targetCents_ = 0.0f;
   float glideSec_ = 0.0f;

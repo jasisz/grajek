@@ -257,16 +257,23 @@ bool voiceAnalyze(float* outRootHz, int16_t* dst, uint32_t dstCap,
       e0 += v * v;
     }
     if (sqrt(e0 / 2048.0) < 0.02) continue;  // too quiet to trust
+    double acAll[601];
     double best = 0.0;
-    int bestLag = 0;
     for (int lag = 80; lag <= 600; ++lag) {  // 600..80 Hz
       double ac = 0.0;
       for (int i = 0; i + lag < 2048; i += 2)
         ac += (double)g_capBuf[w + i] * (double)g_capBuf[w + i + lag];
       ac *= 2.0;
-      if (ac > best) {
-        best = ac;
+      acAll[lag] = ac;
+      if (ac > best) best = ac;
+    }
+    // octave-error guard: prefer the SHORTEST lag nearly as good as the
+    // best — a subharmonic (double period) often peaks slightly higher
+    int bestLag = 0;
+    for (int lag = 80; lag <= 600; ++lag) {
+      if (acAll[lag] >= 0.90 * best) {
         bestLag = lag;
+        break;
       }
     }
     const double clarity = e0 > 0.0 ? best / e0 : 0.0;
@@ -849,7 +856,7 @@ void voiceCapture(Ui& ui) {
       printf("\n  >> nie zlapalem czystego tonu — sprobuj dluzsze 'aaa'\n");
     return;
   }
-  g_voiceSamples[slot] = {g_voiceSlots[slot], len, hz};
+  g_voiceSamples[slot] = {g_voiceSlots[slot], len, hz, (float)kSr / hz};
   g_engine.setVoiceSample(&g_voiceSamples[slot]);
   g_voiceSlot = slot;
   g_hasVoice = true;
