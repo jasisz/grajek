@@ -1,7 +1,7 @@
 #include "duet.h"
 
+#include <Arduino.h>
 #include <math.h>
-#include <stdint.h>
 
 #include "ambient.h"
 #include "ga_scales.h"
@@ -13,18 +13,23 @@ using namespace ga;
 
 namespace {
 
-constexpr int32_t kDuetId = 1400;  // poza siatką, tłem, duchami i dzwonkami
-constexpr int kWin = 1024;         // okno analizy ~21 ms @ 48 kHz
-// próg głosu (RMS po kMicGain) — do strojenia uchem na sprzęcie razem z
-// kMicGain w audio_out.cpp; za niski = duet nuci do szumu wentylatora
+constexpr int kWin = 1024;  // analysis window: 64 ms @ 16 kHz
+// voice threshold (RMS) — tune by ear on hardware together with the mic
+// magnification; too low and the box duets with the fan
 constexpr float kVoiceRms = 0.015f;
+// autocorrelation lags for 80..500 Hz at the 16 kHz mic rate
+constexpr int kLagLo = 32;
+constexpr int kLagHi = 200;
 
 uint32_t s_analyzed = 0;
 int s_stable = 0;
-int s_silent = 0;
 float s_lastCents = 1e9f;
-float s_companion = 1e9f;
-bool s_on = false;
+float s_lastComp = 1e9f;
+
+struct Ev { uint32_t off; float cents; };
+constexpr int kTrackCap = 48;
+Ev s_track[kTrackCap];
+int s_trackN = 0;
 
 float snapToGrid(float cents) {
   // najbliższa komórka pełnej siatki 14x4 aktualnej skali
@@ -48,23 +53,21 @@ namespace duet {
 void reset() {
   s_analyzed = 0;
   s_stable = 0;
-  s_silent = 0;
   s_lastCents = 1e9f;
-  s_companion = 1e9f;
-  s_on = false;
+  s_lastComp = 1e9f;
+  s_trackN = 0;
 }
 
-void humOff(ga::Engine& e) {
-  if (s_on) e.noteOff(kDuetId);
-  s_on = false;
-  s_stable = 0;
-  s_companion = 1e9f;
-  hal::earSetDuet(false);
-  viz::noteOff((int)kDuetId);
+int trackCount() { return s_trackN; }
+uint32_t trackOffset(int i) {
+  return (i >= 0 && i < s_trackN) ? s_track[i].off : 0;
+}
+float trackCents(int i) {
+  return (i >= 0 && i < s_trackN) ? s_track[i].cents : 0.0f;
 }
 
-void tick(ga::Engine& e) {
-  if (!hal::earIsOpen()) return;
+void tick() {
+  if (!hal::earWindowActive()) return;
   const uint32_t n = hal::earCaptured();
   if (n < (uint32_t)kWin || n < s_analyzed + (uint32_t)kWin) return;
   s_analyzed = n;
@@ -80,9 +83,9 @@ void tick(ga::Engine& e) {
   float hz = 0.0f;
 
   if (rms > kVoiceRms) {
-    float acAll[601];
+    float acAll[kLagHi + 1];
     float best = 0.0f;
-    for (int lag = 80; lag <= 600; ++lag) {
+    for (int lag = kLagLo; lag <= kLagHi; ++lag) {
       float ac = 0.0f;
       for (int i = 0; i + lag < kWin; i += 2) ac += w[i] * w[i + lag];
       acAll[lag] = ac;
@@ -90,7 +93,7 @@ void tick(ga::Engine& e) {
     }
     // pierwszy lag bliski maksimum = najniższa wiarygodna podstawa
     int bestLag = 0;
-    for (int lag = 80; lag <= 600; ++lag)
+    for (int lag = kLagLo; lag <= kLagHi; ++lag)
       if (acAll[lag] >= 0.90f * best) {
         bestLag = lag;
         break;
@@ -98,28 +101,21 @@ void tick(ga::Engine& e) {
     const float clarity = e0 > 0.0f ? best / e0 : 0.0f;
     if (clarity > 0.30f && bestLag > 0) {
       voiced = true;
-      hz = 48000.0f / (float)bestLag;
+      hz = hal::earSampleRate() / (float)bestLag;
     }
   }
 
   // telemetria strojenia: raz na sekundę realne liczby na serial —
-  // z nich wynika, czy podnosić kMicGain (rms ~0) czy progi (nuci do szumu)
+  // z nich wynika, czy podnosić magnification (rms ~0) czy progi
   static uint32_t lastLogMs = 0;
   const uint32_t nowMs = millis();
   if (nowMs - lastLogMs > 1000) {
     lastLogMs = nowMs;
-    Serial.printf("grajek: ucho rms=%.4f poziom=%.3f glos=%s hz=%.1f duet=%s\n",
-                  rms, hal::earLevel(), voiced ? "TAK" : "nie", hz,
-                  s_on ? "nuci" : "cicho");
+    Serial.printf("grajek: ucho rms=%.4f poziom=%.3f glos=%s hz=%.1f nut=%d\n",
+                  rms, hal::earLevel(), voiced ? "TAK" : "nie", hz, s_trackN);
   }
 
-  if (!voiced) {
-    // spółgłoski i oddechy to nie koniec piosenki: schodzimy dopiero po
-    // ~300 ms prawdziwej ciszy (analiza tyka co ~21 ms)
-    if (s_on && ++s_silent >= 14) humOff(e);
-    return;
-  }
-  s_silent = 0;
+  if (!voiced) return;  // ciszę i spółgłoski ocenia polityka okien w ŚPIEWIE
 
   float cents = 1200.0f * log2f(hz / settings::baseHz());
   // strażnik oktawy: jak detektor przeskoczył o całą oktawę między tikami,
@@ -141,25 +137,14 @@ void tick(ga::Engine& e) {
   if (fabsf(comp - snapped) < 30.0f)
     comp = snapToGrid(snapped - 550.0f);  // awaryjnie coś koło kwarty
   if (comp > snapped - 100.0f)
-    comp = snapped - 1200.0f;  // grid floor reached: hum the octave below,
+    comp = snapped - 1200.0f;  // grid floor reached: the octave below,
                                // never unison — the companion sits UNDER you
-  if (!s_on || fabsf(comp - s_companion) > 25.0f) {
+  if (s_trackN == 0 || fabsf(comp - s_lastComp) > 25.0f) {
     // zaśpiewana (przyciągnięta do skali) nuta zostaje we wspomnieniach:
     // machanie po śpiewaniu rozsypuje twoją własną melodię
     ambient::gardenPush(snapped);
-    // legato: to samo id + glide + miękki PURE przez kanapkę FIFO;
-    // im głośniej śpiewasz, tym śmielej nuci towarzysz
-    const float vel = 0.30f + fminf(0.40f, rms * 3.0f);
-    e.setParam(Param::TimbrePreset, 0.0f);
-    e.setParam(Param::GlideSec, 0.08f);
-    e.noteOn(kDuetId, comp, vel);
-    e.setParam(Param::GlideSec, 0.0f);
-    e.setParam(Param::TimbrePreset, (float)settings::preset());
-    s_companion = comp;
-    if (!s_on) viz::toast("duet!");
-    s_on = true;
-    hal::earSetDuet(true);
-    viz::noteOn((int)kDuetId, comp, 0.5f);
+    if (s_trackN < kTrackCap) s_track[s_trackN++] = {n, comp};
+    s_lastComp = comp;
   }
 }
 

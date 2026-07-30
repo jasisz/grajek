@@ -69,7 +69,9 @@ void setup() {
   Serial.begin(115200);  // our diagnostics were silently dropped without it
   auto cfg = M5.config();
   cfg.internal_spk = false;  // we drive the codec ourselves (low latency)
-  cfg.internal_mic = false;  // mic comes later with the LOOP mode
+  cfg.internal_mic = true;   // configures M5.Mic pins + the ES8311 ADC
+                             // callback; nothing starts until a listening
+                             // window borrows the bus (see audio_out.h)
   cfg.internal_imu = true;
   M5Cardputer.begin(cfg, true);
   // Diagnose the display before touching it: if the M5GFX autodetect did
@@ -95,9 +97,9 @@ void setup() {
     }
   }
 
-  // EKSPERYMENT UCHA: fabryczny mikrofon działa przy 16 kHz (BCLK 512 kHz),
-  // nasz duplex przy 48 kHz milczy — testujemy zależność od zegara.
-  // Docelowo wraca 48000 (albo najwyższa częstotliwość, przy której ADC żyje).
+  // Synth at 48 kHz; the ear runs its listening windows at 16 kHz on the
+  // factory M5.Mic path (the full-duplex experiments are over — one bus,
+  // one master; see audio_out.h).
   engine.init(48000.0f);
   engine.setParam(ga::Param::FilterCutoffHz, 7500.0f);
 
