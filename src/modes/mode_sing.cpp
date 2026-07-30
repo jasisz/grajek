@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "../duet.h"
+#include "../firefly.h"
 #include "../hal/audio_out.h"
 #include "../settings.h"
 #include "../viz.h"
@@ -113,6 +114,7 @@ void ModeSing::tick(ModeCtx& ctx, float dt) {
         ctx.engine.setParam(ga::Param::GlideSec, 0.0f);
         ctx.engine.setParam(ga::Param::TimbrePreset,
                             (float)settings::preset());
+        firefly::note(comp, 0.4f);
       }
       if (!hal::earAnswerActive()) {
         ctx.engine.noteOff(kDuetId);

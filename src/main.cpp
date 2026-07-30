@@ -7,6 +7,7 @@
 #include <M5Cardputer.h>
 
 #include "ambient.h"
+#include "firefly.h"
 #include "ga_engine.h"
 #include "hal/audio_out.h"
 #include "input/keys.h"
@@ -204,6 +205,7 @@ void loop() {
 
   ambient::tick();
   pulse::tick();
+  firefly::tick();
 
   delay(2);  // breathing room for WDT/USB; audio lives on the other core anyway
 }

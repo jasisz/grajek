@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "../ambient.h"
+#include "../firefly.h"
 #include "../pulse.h"
 #include "../settings.h"
 #include "../viz.h"
@@ -106,6 +107,7 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
     ctx.engine.noteOn(id, cents, 0.9f);
     ambient::gardenPush(cents);
     viz::noteOn(id, cents, 0.9f);
+    firefly::note(cents, 0.9f);
   } else {
     ctx.engine.noteOff(id);
     viz::noteOff(id);
@@ -149,6 +151,7 @@ void ModeInstrument::triggerChime(ModeCtx& ctx, float energy, float dir) {
 
   ambient::notePresence();
   viz::chime(cents, vel);
+  firefly::note(cents, vel);
 }
 
 void ModeInstrument::imuStep(ModeCtx& ctx) {
@@ -235,8 +238,12 @@ void ModeInstrument::tick(ModeCtx& ctx, float dt) {
   }
 
   // duch zagrał wspomnienie? niech rozbłyśnie jego iskierka na łące
+  // (i świetlik w pudełku — miękka poświata zamiast błysku)
   float ghostCents = 0.0f;
-  if (ambient::pollGhost(&ghostCents)) viz::ghost(ghostCents);
+  if (ambient::pollGhost(&ghostCents)) {
+    viz::ghost(ghostCents);
+    firefly::ghost(ghostCents);
+  }
 
   // łąka żyje cały czas — pełna klatka co przebieg (main ogranicza do ~25 fps)
   markDirty();
