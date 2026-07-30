@@ -26,15 +26,6 @@ class Engine {
   void noteOff(int32_t id);
   void allNotesOff();
   void setParam(Param p, float v);
-  // Publish the caught voice grain for the VOICE preset. The caller owns the
-  // struct and its data and must keep BOTH alive while voices may read them
-  // (double-buffer and swap). nullptr = VOICE preset falls back to silence.
-  void setVoiceSample(const VoiceSample* s) {
-    vsmp_.store(s, std::memory_order_release);
-  }
-  bool hasVoiceSample() const {
-    return vsmp_.load(std::memory_order_relaxed) != nullptr;
-  }
 
   // --- audio-thread API ---
   void process(float* out, int nFrames);
@@ -54,7 +45,6 @@ class Engine {
   // Safety valve: if the queue is full when a NoteOff/AllOff arrives, dropping
   // it would leave a note stuck forever — escalate to "release everything".
   std::atomic<bool> pendingAllOff_{false};
-  std::atomic<const VoiceSample*> vsmp_{nullptr};
   Voice voices_[kMaxVoices];
   SVF filter_;
   Timbre timbre_;

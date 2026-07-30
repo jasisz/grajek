@@ -94,10 +94,8 @@ void Engine::handle(const Event& e) {
       const float bright = clampf(1.0f - 0.25f * oct, 0.5f, 1.3f);
       for (int k = 1; k < Timbre::kPartials; ++k) tl.gain[k] *= bright;
 
-      const VoiceSample* vs =
-          tl.useSample ? vsmp_.load(std::memory_order_acquire) : nullptr;
       v->noteOn(e.id, e.a, clampf(e.b * loud, 0.0f, 1.0f), tl,
-                sameId ? glideSec_ : 0.0f, ++ageCounter_, vs);
+                sameId ? glideSec_ : 0.0f, ++ageCounter_);
       break;
     }
     case Event::NoteOff:

@@ -44,6 +44,7 @@
 #include <string.h>
 #include <time.h>
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <vector>
@@ -184,6 +185,8 @@ std::vector<int16_t>* g_recBuf = nullptr;
 // ES8311 mic. Headphones recommended on laptop speakers (feedback).
 AudioQueueRef g_inQueue = nullptr;
 std::atomic<bool> g_earOpen{false};
+std::atomic<bool> g_duetOn{false};  // the box is humming along (defined
+                                    // early: the duck and the status read it)
 double g_earHeldUntil = 0.0;
 
 // tiny SPSC float ring: input-queue thread -> output-queue thread
@@ -218,11 +221,6 @@ constexpr uint32_t kCapMax = 96000;  // 2 s @ 48 kHz
 float g_capBuf[kCapMax];
 std::atomic<uint32_t> g_capCount{0};
 
-int16_t g_voiceSlots[2][16384];  // double buffer: voices may still read old
-VoiceSample g_voiceSamples[2];
-int g_voiceSlot = 0;
-bool g_hasVoice = false;
-
 void earInCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf,
                    const AudioTimeStamp*, UInt32,
                    const AudioStreamPacketDescription*) {
@@ -235,74 +233,6 @@ void earInCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf,
     g_capCount.store(c, std::memory_order_release);
   }
   AudioQueueEnqueueBuffer(q, buf, 0, nullptr);
-}
-
-// Find the loudest pitch-stable window (autocorrelation, 80..600 Hz) and cut
-// a grain of whole periods (~140 ms) out of it. Returns false if nothing in
-// the take held a clear tone.
-bool voiceAnalyze(float* outRootHz, int16_t* dst, uint32_t dstCap,
-                  uint32_t* outLen) {
-  const uint32_t nCap =
-      g_capCount.load(std::memory_order_acquire) < kCapMax
-          ? g_capCount.load(std::memory_order_acquire)
-          : kCapMax;
-  if (nCap < 4096) return false;
-  double bestClarity = 0.0;
-  int bestStart = -1;
-  float bestHz = 0.0f;
-  for (uint32_t w = 0; w + 2048 <= nCap; w += 1024) {
-    double e0 = 0.0;
-    for (int i = 0; i < 2048; ++i) {
-      const double v = g_capBuf[w + i];
-      e0 += v * v;
-    }
-    if (sqrt(e0 / 2048.0) < 0.02) continue;  // too quiet to trust
-    double acAll[601];
-    double best = 0.0;
-    for (int lag = 80; lag <= 600; ++lag) {  // 600..80 Hz
-      double ac = 0.0;
-      for (int i = 0; i + lag < 2048; i += 2)
-        ac += (double)g_capBuf[w + i] * (double)g_capBuf[w + i + lag];
-      ac *= 2.0;
-      acAll[lag] = ac;
-      if (ac > best) best = ac;
-    }
-    // octave-error guard: prefer the SHORTEST lag nearly as good as the
-    // best — a subharmonic (double period) often peaks slightly higher
-    int bestLag = 0;
-    for (int lag = 80; lag <= 600; ++lag) {
-      if (acAll[lag] >= 0.90 * best) {
-        bestLag = lag;
-        break;
-      }
-    }
-    const double clarity = e0 > 0.0 ? best / e0 : 0.0;
-    if (clarity > bestClarity) {
-      bestClarity = clarity;
-      bestStart = (int)w;
-      bestHz = (float)kSr / (float)bestLag;
-    }
-  }
-  if (bestStart < 0 || bestClarity < 0.5 || bestHz < 70.0f || bestHz > 700.0f)
-    return false;
-  const float period = (float)kSr / bestHz;
-  int periods = (int)(0.14f * bestHz + 0.5f);
-  if (periods < 4) periods = 4;
-  uint32_t glen = (uint32_t)((float)periods * period + 0.5f);
-  while (glen > dstCap || (uint32_t)bestStart + glen > nCap) {
-    glen -= (uint32_t)(period + 0.5f);
-    if (glen < (uint32_t)(4.0f * period)) return false;
-  }
-  float peak = 1e-6f;
-  for (uint32_t i = 0; i < glen; ++i)
-    peak = fmaxf(peak, fabsf(g_capBuf[bestStart + i]));
-  const float g = 0.8f / peak;
-  for (uint32_t i = 0; i < glen; ++i)
-    dst[i] = (int16_t)(clampf(g_capBuf[bestStart + i] * g, -1.0f, 1.0f) *
-                       32767.0f);
-  *outRootHz = bestHz;
-  *outLen = glen;
-  return true;
 }
 
 bool earOpen() {
@@ -430,8 +360,12 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
   // (mic 2 cm from the speaker) this is the difference between an
   // instrument and a howl.
   static float duck = 1.0f;
+  // with the duet humming, ease the duck so the companion is audible
+  // (still -10 dB — the acoustic loop stays starved)
   const float duckTarget =
-      g_earOpen.load(std::memory_order_relaxed) ? 0.12f : 1.0f;
+      g_earOpen.load(std::memory_order_relaxed)
+          ? (g_duetOn.load(std::memory_order_relaxed) ? 0.30f : 0.12f)
+          : 1.0f;
   for (int i = 0; i < frames; ++i) {
     duck += 0.0008f * (duckTarget - duck);  // ~30 ms ramp, no clicks
     samples[i] *= duck;
@@ -517,8 +451,8 @@ double nowSec() {
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
-const char* kPresetNames[kNumTimbrePresets] = {"PURE",  "DRONE",    "REED",
-                                               "CHIME", "MUSICBOX", "VOICE"};
+const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED",
+                                               "CHIME", "MUSICBOX"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 
 // JI ladder for toss landings; sign of spin mirrors it downward (utonal).
@@ -819,6 +753,7 @@ void printStatus(const Ui& ui) {
            g_looper.playbackLevel() * 100.0f);
   }
   if (g_earOpen.load(std::memory_order_relaxed)) printf(" UCHO");
+  if (g_duetOn.load(std::memory_order_relaxed)) printf(" DUET");
   if (g_age != 2) printf(" wiek:%s", kAgeNames[g_age]);
   if (g_pulse.ticking)
     printf(" puls:%d", (int)(60.0 / g_pulse.period + 0.5));
@@ -844,28 +779,106 @@ void allOff() {
   for (auto& n : g_notes) n = NoteState{};
 }
 
-// After the ear closes: hunt the take for a voice grain and, if found, the
-// keyboard starts singing with it immediately — no extra steps, a child
-// sings "aaa" and the grid speaks their voice. Nothing touches the disk.
-void voiceCapture(Ui& ui) {
+// --- the DUET: while you sing into the ear, the box hums along ---
+// Live pitch tracking on the incoming voice; a single companion synth voice
+// (soft PURE hum) slides legato to a consonant scale tone BELOW the singer
+// (a third/sixth in PENTA/MAJOR). The human voice is never touched — the
+// box becomes the second singer, not an imitation.
+struct Duet {
+  uint32_t analyzed = 0;  // capture samples already consumed
+  int stable = 0;
+  int silent = 0;
+  float lastCents = 1e9f;
+  float companion = 1e9f;
+};
+Duet g_duet;
+constexpr int32_t kDuetId = 1400;
+
+float duetSnapToGrid(const Ui& ui, float cents) {
+  float best = 0.0f, bestD = 1e9f;
+  for (int row = 0; row < kGridRows; ++row)
+    for (int col = 0; col < kGridCols; ++col) {
+      const float c = gridToCents((ScaleId)ui.scale, col, row);
+      const float d = fabsf(c - cents);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+  return best;
+}
+
+void duetHumOff() {
+  if (g_duetOn.load(std::memory_order_relaxed)) g_engine.noteOff(kDuetId);
+  g_duetOn.store(false);
+  g_duet.stable = 0;
+  g_duet.companion = 1e9f;
+}
+
+void duetTick(const Ui& ui) {
+  if (!g_earOpen.load(std::memory_order_relaxed)) return;
+  const uint32_t n =
+      std::min(g_capCount.load(std::memory_order_acquire), kCapMax);
+  if (n < g_duet.analyzed + 1024) return;  // wait for fresh audio
+  g_duet.analyzed = n;
+  const float* w = g_capBuf + (n - 1024);
+
+  double e0 = 0.0;
+  for (int i = 0; i < 1024; ++i) e0 += (double)w[i] * (double)w[i];
+  bool voiced = false;
   float hz = 0.0f;
-  uint32_t len = 0;
-  const int slot = g_voiceSlot ^ 1;  // voices may still read the old slot
-  if (!voiceAnalyze(&hz, g_voiceSlots[slot], 16384, &len)) {
-    if (g_capCount.load() > 24000)  // there was a real take, just no tone
-      printf("\n  >> nie zlapalem czystego tonu — sprobuj dluzsze 'aaa'\n");
+  if (sqrt(e0 / 1024.0) > 0.03) {
+    double acAll[601];
+    double best = 0.0;
+    for (int lag = 80; lag <= 600; ++lag) {
+      double ac = 0.0;
+      for (int i = 0; i + lag < 1024; i += 2)
+        ac += (double)w[i] * (double)w[i + lag];
+      acAll[lag] = ac;
+      if (ac > best) best = ac;
+    }
+    int bestLag = 0;
+    for (int lag = 80; lag <= 600; ++lag)
+      if (acAll[lag] >= 0.90 * best) {
+        bestLag = lag;
+        break;
+      }
+    const double clarity = e0 > 0.0 ? best / e0 : 0.0;
+    if (clarity > 0.30 && bestLag > 0) {
+      voiced = true;
+      hz = (float)kSr / (float)bestLag;
+    }
+  }
+
+  if (!voiced) {
+    if (g_duetOn.load(std::memory_order_relaxed) && ++g_duet.silent >= 4)
+      duetHumOff();  // the singer paused — the box bows out
     return;
   }
-  g_voiceSamples[slot] = {g_voiceSlots[slot], len, hz, (float)kSr / hz};
-  g_engine.setVoiceSample(&g_voiceSamples[slot]);
-  g_voiceSlot = slot;
-  g_hasVoice = true;
-  ui.preset = 5;
-  g_uiPreset = 5;
-  g_engine.setParam(Param::TimbrePreset, 5.0f);
-  printf("\n  >> VOICE zlapany (~%.0f Hz, %.0f ms) — klawiatura spiewa"
-         " twoim glosem! (` = inne barwy)\n",
-         (double)hz, 1000.0 * (double)len / kSr);
+  g_duet.silent = 0;
+  const float root =
+      kBaseOctaves[ui.octave] * exp2f(g_sim.centerCents / 1200.0f);
+  const float cents = 1200.0f * log2f(hz / root);
+  if (fabsf(cents - g_duet.lastCents) < 80.0f) ++g_duet.stable;
+  else g_duet.stable = 1;
+  g_duet.lastCents = cents;
+  if (g_duet.stable < 2) return;  // vibrato-tolerant, blip-resistant
+
+  const float snapped = duetSnapToGrid(ui, cents);
+  float comp = duetSnapToGrid(ui, snapped - 350.0f);  // aim a third below
+  if (fabsf(comp - snapped) < 30.0f)
+    comp = duetSnapToGrid(ui, snapped - 550.0f);  // fall back to a fourthish
+  if (!g_duetOn.load(std::memory_order_relaxed) ||
+      fabsf(comp - g_duet.companion) > 25.0f) {
+    // legato companion: same id + glide + a soft PURE hum via FIFO sandwich
+    g_engine.setParam(Param::TimbrePreset, 0.0f);
+    g_engine.setParam(Param::GlideSec, 0.08f);
+    g_engine.noteOn(kDuetId, comp, 0.30f);
+    g_engine.setParam(Param::GlideSec, 0.0f);
+    g_engine.setParam(Param::TimbrePreset, (float)g_uiPreset);
+    g_duet.companion = comp;
+    g_duetOn.store(true);
+  }
 }
 
 // --- the soul: grajek remembers you across sessions ---
@@ -1200,14 +1213,11 @@ int main(int argc, char** argv) {
          "          polnuty/osemki), a gdy przestajesz — samo puszcza\n");
   printf("  WIEK:   SHIFT+A cykluje 2-3 / 4-6 / 7+ — pudelko rosnie z\n"
          "          dzieckiem (maluch: pentatonika i zero pokretel)\n");
-  printf("  UCHO:   TRZYMAJ SHIFT+M i spiewaj — jak walkie-talkie: podczas\n"
-         "          sluchania pudelko sie przycisza (zero sprzezenia), po\n"
+  printf("  UCHO:   TRZYMAJ SHIFT+M i spiewaj — pudelko CICHO NUCI POD TOBA\n"
+         "          czysty interwal (DUET, slizga sie legato za glosem); po\n"
          "          puszczeniu ODPOWIADA — glos wraca z tasmy, strun i\n"
          "          poglosu; mikrofon dziala TYLKO gdy trzymasz, nic nie\n"
          "          jest zapisywane\n");
-  printf("  VOICE:  zaspiewaj w ucho rowne 'aaa' — po puszczeniu klawiatura\n"
-         "          SPIEWA TWOIM GLOSEM w czystym stroju (barwa VOICE);\n"
-         "          kazde nowe 'aaa' podmienia glos, ` wraca do syntezy\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
@@ -1302,7 +1312,6 @@ int main(int argc, char** argv) {
       } else if (c == '`') {
         if (g_age > 0) {
           ui.preset = (ui.preset + 1) % kNumTimbrePresets;
-          if (ui.preset == 5 && !g_hasVoice) ui.preset = 0;  // no grain yet
           g_uiPreset = ui.preset;
           g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
         }
@@ -1329,10 +1338,12 @@ int main(int argc, char** argv) {
         // hold-to-listen: auto-repeat keeps refreshing the deadline
         g_earHeldUntil = nowSec() + 0.8;
         if (!g_earOpen.load(std::memory_order_relaxed)) {
-          if (earOpen())
-            printf("\n  >> UCHO otwarte — spiewaj (trzymaj M)\n");
-          else
+          if (earOpen()) {
+            g_duet = Duet{};  // fresh take, fresh tracking
+            printf("\n  >> UCHO otwarte — spiewaj, pudelko zanuci z toba\n");
+          } else {
             printf("\n  >> nie moge otworzyc mikrofonu (uprawnienia?)\n");
+          }
         }
       } else if (c == 'E') {
         g_echo.setEnabled(!g_echo.enabled());
@@ -1472,11 +1483,12 @@ int main(int argc, char** argv) {
     weatherTick(ui);
     gardenTick(ui);
     pulseTick();
+    duetTick(ui);
     if (g_earOpen.load(std::memory_order_relaxed) &&
         nowSec() > g_earHeldUntil) {
       earClose();
+      duetHumOff();
       printf("\n  >> ucho zamkniete — sluchaj, jak wraca\n");
-      voiceCapture(ui);
       printStatus(ui);
       lastStatusAt = nowSec();
     }

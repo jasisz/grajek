@@ -47,10 +47,6 @@ Timbre timbrePreset(int idx) {
       t.shimmer = 0.4f;
       t.attack = 0.001f; t.decay = 0.9f; t.sustain = 0.0f; t.release = 0.6f;
       break;
-    case 5:  // VOICE — the caught grain of the player's own voice
-      t.useSample = true;
-      t.attack = 0.008f; t.decay = 0.3f; t.sustain = 0.85f; t.release = 0.5f;
-      break;
   }
   return t;
 }
@@ -80,21 +76,14 @@ void Voice::init(float sampleRate, uint32_t seed) {
 }
 
 void Voice::noteOn(int32_t id, float cents, float vel, const Timbre& t,
-                   float glideSec, uint32_t age, const VoiceSample* smp) {
-  smp_ = t.useSample ? smp : nullptr;
-  smpPos_ = 0.0f;
-  srcScan_ = 0.0f;
-  outCount_ = 0.0f;
-  gsOn_[0] = gsOn_[1] = gsOn_[2] = false;
-  gsNext_ = 0;
+                   float glideSec, uint32_t age) {
   const bool wasActive = env_.active();
   id_ = id;
   vel_ = clampf(vel, 0.0f, 1.0f);
   age_ = age;
   for (int k = 0; k < Timbre::kPartials; ++k) {
     ratio_[k] = t.ratio[k];
-    // VOICE preset with no grain caught yet: silent, not a fallback sine
-    gain_[k] = (t.useSample && !smp_) ? 0.0f : t.gain[k];
+    gain_[k] = t.gain[k];
     det_[k] = (k == 0) ? 0.0f : rnd11() * t.detuneCents;
     pdecay_[k] = t.pdecay[k];
     pamp_[k] = 1.0f;
@@ -123,81 +112,6 @@ void Voice::render(float* out, int n, float baseHz, float bendRatio) {
   }
 
   const float f0 = baseHz * centsToRatio(cents_) * bendRatio;
-
-  // VOICE mode. Preferred path: PSOLA — pitch-synchronous grains of the
-  // source, windowed and overlap-added at the TARGET period. Pitch changes,
-  // the formants stay the player's own (no chipmunk, no Vader). Fallback for
-  // samples without a known period: crossfaded tape loop.
-  if (smp_ && smp_->data && smp_->frames > 64 && smp_->rootHz > 1.0f) {
-    const float len = (float)smp_->frames;
-    const int16_t* d = smp_->data;
-    const uint32_t last = smp_->frames - 1;
-    auto at = [&](float p) {
-      if (p < 0.0f) p = 0.0f;
-      const uint32_t i0 = (uint32_t)p;
-      const uint32_t i1 = i0 < last ? i0 + 1 : last;
-      const float fr = p - (float)i0;
-      return ((float)d[i0] * (1.0f - fr) + (float)d[i1] * fr) *
-             (1.0f / 32768.0f);
-    };
-
-    const float Ps = smp_->periodFrames;
-    if (Ps >= 16.0f && len > 4.0f * Ps) {
-      const float Pt = clampf(sr_ / f0, 8.0f, 4096.0f);  // target period
-      // half-sine windows at 50% overlap sum to constant power; for upward
-      // shifts the window shrinks with the target so at most ~2 overlap
-      const float winLen = 2.0f * fminf(Ps, Pt);
-      const float span = len - winLen - 2.0f;
-      for (int i = 0; i < n; ++i) {
-        const float e = env_.process();
-        outCount_ -= 1.0f;
-        if (outCount_ <= 0.0f) {  // launch a grain every target period
-          outCount_ += Pt;
-          gsStart_[gsNext_] = srcScan_;
-          gsPos_[gsNext_] = 0.0f;
-          gsOn_[gsNext_] = true;
-          gsNext_ = (gsNext_ + 1) % 3;
-        }
-        float s = 0.0f;
-        for (int g = 0; g < 3; ++g) {
-          if (!gsOn_[g]) continue;
-          const float p = gsPos_[g];
-          if (p >= winLen) {
-            gsOn_[g] = false;
-            continue;
-          }
-          const float w = sinTurns(0.5f * p / winLen);  // half-sine window
-          s += at(gsStart_[g] + p) * w;
-          gsPos_[g] += 1.0f;
-        }
-        out[i] += s * 0.9f * vel_ * e;
-        // the source is scanned slowly so the vowel stays alive; the wrap
-        // seam is hidden inside the grain windows
-        srcScan_ += Ps / Pt;
-        if (span > 1.0f && srcScan_ >= span) srcScan_ -= span;
-      }
-      return;
-    }
-
-    // fallback: crossfaded tape loop (formants shift with pitch)
-    float rate = f0 / smp_->rootHz;
-    rate = clampf(rate, 0.05f, 20.0f);
-    const float fade = len > 2048.0f ? 256.0f : len * 0.125f;
-    const float loopStart = len - fade;
-    for (int i = 0; i < n; ++i) {
-      const float e = env_.process();
-      float s = at(smpPos_);
-      if (smpPos_ >= loopStart) {  // crossfade the seam
-        const float a = (smpPos_ - loopStart) / fade;
-        s = s * (1.0f - a) + at(smpPos_ - loopStart) * a;
-      }
-      out[i] += s * 0.9f * vel_ * e;
-      smpPos_ += rate;
-      if (smpPos_ >= len) smpPos_ -= loopStart;
-    }
-    return;
-  }
-
   uint32_t inc[Timbre::kPartials];
   float g[Timbre::kPartials];
   for (int k = 0; k < Timbre::kPartials; ++k) {
