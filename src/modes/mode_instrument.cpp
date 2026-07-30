@@ -69,10 +69,15 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
   // wszystkie 56 klawiszy gra — kolumna = stopień skali, dolny rząd najniżej
   const int id = row * 14 + col;
   const uint64_t m = (uint64_t)1 << id;
+  // The physical keyboard is staggered: the digit row sits one key to the
+  // right of the letter rows, so the column the EYE sees (e.g. 4-T-F-C) is
+  // matrix col+1 on the top row. Tune to the eye, not the matrix — a seen
+  // column must stack into one chord. (gridToCents clamps the far corner.)
+  const int gridCol = row == 0 ? col + 1 : col;
   if (down) {
     ambient::notePresence();
     const int gridRow = 3 - row;
-    const float cents = gridToCents(settings::scale(), col, gridRow);
+    const float cents = gridToCents(settings::scale(), gridCol, gridRow);
     ctx.engine.noteOn(id, cents, 0.9f);
     ambient::gardenPush(cents);
     viz::noteOn(id, cents, 0.9f);
@@ -106,16 +111,17 @@ void ModeInstrument::triggerChime(ModeCtx& ctx, float energy, float dir) {
     cents = ga::scaleStepCents(settings::scale(), chimeStep_);
   }
 
-  const float vel = clampf(0.35f + (energy - kSwingOn) * 0.45f, 0.35f, 0.85f);
+  const float vel = clampf(0.45f + (energy - kSwingOn) * 0.5f, 0.45f, 0.90f);
   const int32_t id = kChimeIdBase + (chimeSlot_++ & 7);
-  // miękki atak tylko dla tej nuty (kanapka FIFO jak u duchów) — wiatr
-  // unosi wspomnienia, nie uderza w nie
-  ctx.engine.setParam(Param::EnvAttack, 0.25f);
+  // Atak łagodny, ale KRÓTSZY niż nuta: przy 250 ms narastania i wyciszeniu
+  // po 150 ms dźwięk gasł, zanim doszedł do pełni — wspomnień nie było
+  // słychać. 60 ms wystarcza, by wiatr unosił nutę zamiast w nią uderzać.
+  ctx.engine.setParam(Param::EnvAttack, 0.06f);
   ctx.engine.noteOn(id, cents, vel);
   ctx.engine.setParam(Param::EnvAttack,
                       ga::timbrePreset(settings::preset()).attack);
   if (pendingCount_ < 8)
-    pending_[pendingCount_++] = {millis() + 150, id};
+    pending_[pendingCount_++] = {millis() + 420, id};  // zdąży wybrzmieć
 
   ambient::notePresence();
   viz::chime(cents, vel);

@@ -6,6 +6,9 @@
 //  - 12-EDO: row = +5 steps (500 c)
 //  - 19-EDO: row = +8 steps (505.3 c)
 //  - 31-EDO: row = +13 steps (503.2 c)
+//    (all EDO grids are lifted +1 octave: fourth-rows span far less than
+//     octave-rows, and without the lift switching PENTA -> EDO dropped the
+//     whole keyboard by over an octave)
 //  - JI 11-limit (Partch spirit): 14 ratios per octave, row = +1200 c
 //  - PENTA JI (major pentatonic 1/1 9/8 5/4 3/2 5/3) and MAJOR JI
 //    (Ptolemy's diatonic): row = +2 scale steps, so vertical neighbours are
