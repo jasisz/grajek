@@ -208,8 +208,11 @@ bool gardenPluck(float* cents) {
   const int idx = (s_head - 1 - back + 2 * kGardenCap) % kGardenCap;
   float c = s_ring[idx].cents;
   const float r = rnd01();
-  if (r < 0.60f) { /* jak zagrano */ }
-  else if (r < 0.85f) c += 1200.0f;
+  // przewaga „jak zagrano": machanie ma być SŁYSZALNIE powtórką tego, co
+  // dziecko zagrało — transpozycje tylko na okrasę, bo za często rozmywały
+  // rozpoznawalność melodii
+  if (r < 0.78f) { /* jak zagrano */ }
+  else if (r < 0.92f) c += 1200.0f;
   else c += 702.0f;
   if (cents) *cents = c;
   return true;
