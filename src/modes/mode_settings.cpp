@@ -3,10 +3,14 @@
 #include <stdio.h>
 
 #include "../settings.h"
+#include "../soul.h"
 #include "../viz.h"
 #include "ga_scales.h"
 
-void ModeSettings::enter(ModeCtx&) { markDirty(); }
+void ModeSettings::enter(ModeCtx&) {
+  soul::save();  // a natural pause — remember the garden, the chord, the pulse
+  markDirty();
+}
 
 void ModeSettings::onKey(ModeCtx& ctx, int col, int row, bool down) {
   if (!down || row != 0) return;  // cyfry mieszkają w górnym rzędzie

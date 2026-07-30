@@ -23,12 +23,21 @@ bool gardenPluck(float* cents, float dir);
 // after a scene reset); index 0 = oldest remembered note
 int gardenCount();
 float gardenCents(int idxOldest);
+// soul: restore the garden from NVS. Restored memories do NOT count as
+// playing — ghosts continue sessions, they never start them.
+void gardenRestore(const float* cents, int n);
+// soul: one remembered note a few seconds after waking, unless the child
+// starts playing first. Power-on is the human act that earns the greeting.
+void scheduleGreeting();
 
 // background chord (default 1/1 + 3/2; hand-picking makes the choice law)
 void backgroundToggleNote(float cents);
 void backgroundSetEnabled(bool on);
 bool backgroundEnabled();
 int backgroundCount();
+bool backgroundIsCustom();
+// soul: restore a hand-picked chord from NVS (marks the choice as law)
+void backgroundRestoreChord(const float* cents, int n);
 // wznowienie tła po engine.allNotesOff() (wyjście z trybu przez menu
 // ubijało tampurę na zawsze — pogoda dogrywa tylko kwintę przy zmianie)
 void backgroundRefresh();

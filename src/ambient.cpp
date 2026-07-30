@@ -5,6 +5,7 @@
 
 #include "ga_dsp.h"
 #include "hal/audio_out.h"
+#include "pulse.h"
 
 namespace {
 
@@ -33,6 +34,10 @@ uint32_t s_lastInputMs = 0;
 uint32_t s_nextGhostMs = 0;
 uint32_t s_ghostMask = 0;
 int s_ghostSlot = 0;
+// ghosts continue sessions, they never start them: no sowing until a real
+// human act this session (a restored garden alone must stay silent)
+bool s_played = false;
+uint32_t s_greetAtMs = 0;  // the one waking-up note (soul), 0 = none
 constexpr int32_t kGhostIdBase = 1100;
 // 7 s ciszy wystarczy — przy 12 s pamięć pudełka była praktycznie
 // niesłyszalna w normalnej zabawie (dziecko nie robi tak długich pauz)
@@ -125,6 +130,23 @@ void ghostSilenceAll() {
   s_ghostMask = 0;
 }
 
+// one ghost voice: soft attack sandwich + scheduled note-off + viz event
+void ghostPlay(float cents, float vel, float attack, uint32_t nowMs) {
+  const int slot = s_ghostSlot++ & 3;
+  const int32_t id = kGhostIdBase + slot;
+  s_ghostMask |= (1u << slot);
+  // soft attack just for this note — the engine queue is FIFO, single
+  // producer, drained fully before each render: the sandwich is race-free
+  s_engine->setParam(ga::Param::EnvAttack, attack);
+  s_engine->noteOn(id, cents, vel);
+  s_engine->setParam(ga::Param::EnvAttack, s_presetAttack);
+  s_lastGhostCents = cents;  // wizualizacja rozbłyśnie odpowiednią iskierkę
+  s_ghostEvent = true;
+  if (s_pendingCount < 6)
+    s_pending[s_pendingCount++] = {
+        nowMs + 2000 + (uint32_t)(2500.0f * rnd01()), id};
+}
+
 void gardenTick(uint32_t nowMs) {
   // scheduled ghost note-offs
   for (int i = 0; i < s_pendingCount;) {
@@ -136,7 +158,16 @@ void gardenTick(uint32_t nowMs) {
     }
   }
 
-  if (nowMs - s_lastInputMs < kGhostIdleMs || s_count == 0) {
+  // the waking-up greeting: ONE remembered note, unless play began first
+  if (s_greetAtMs && (int32_t)(nowMs - s_greetAtMs) >= 0) {
+    s_greetAtMs = 0;
+    if (!s_played && s_count > 0) {
+      const int idx = (s_head - 1 + kGardenCap) % kGardenCap;  // freshest
+      ghostPlay(s_ring[idx].cents, 0.30f, 1.6f, nowMs);
+    }
+  }
+
+  if (!s_played || nowMs - s_lastInputMs < kGhostIdleMs || s_count == 0) {
     s_nextGhostMs = 0;
     return;
   }
@@ -146,6 +177,15 @@ void gardenTick(uint32_t nowMs) {
   }
   if ((int32_t)(nowMs - s_nextGhostMs) < 0) return;
   s_nextGhostMs = nowMs + expDelayMs(9000.0f);
+  // the ghosts remember your last pulse: sowing snaps to that beat grid
+  if (pulse::memoryPeriodSec() > 0.15) {
+    const double per = pulse::memoryPeriodSec();
+    const double at = (double)s_nextGhostMs * 0.001;
+    double snapped =
+        pulse::lastOnsetSec() + round((at - pulse::lastOnsetSec()) / per) * per;
+    while (snapped * 1000.0 < (double)nowMs + 200.0) snapped += per;
+    s_nextGhostMs = (uint32_t)(snapped * 1000.0);
+  }
 
   const float u = rnd01();
   const int back = (int)(u * u * (float)(s_count - 1));
@@ -159,19 +199,7 @@ void gardenTick(uint32_t nowMs) {
   else if (r < 0.80f) cents += 702.0f;
   else cents -= 498.0f;
 
-  const int slot = s_ghostSlot++ & 3;
-  const int32_t id = kGhostIdBase + slot;
-  s_ghostMask |= (1u << slot);
-  // soft attack just for this note — the engine queue is FIFO, single
-  // producer, drained fully before each render: the sandwich is race-free
-  s_engine->setParam(ga::Param::EnvAttack, 1.2f);
-  s_engine->noteOn(id, cents, 0.26f + 0.16f * rnd01());
-  s_engine->setParam(ga::Param::EnvAttack, s_presetAttack);
-  s_lastGhostCents = cents;  // wizualizacja rozbłyśnie odpowiednią iskierkę
-  s_ghostEvent = true;
-  if (s_pendingCount < 6)
-    s_pending[s_pendingCount++] = {
-        nowMs + 2000 + (uint32_t)(2500.0f * rnd01()), id};
+  ghostPlay(cents, 0.26f + 0.16f * rnd01(), 1.2f, nowMs);
 }
 
 }  // namespace
@@ -194,6 +222,8 @@ void tick() {
 
 void notePresence() {
   s_lastInputMs = millis();
+  s_played = true;
+  s_greetAtMs = 0;  // the child is already here — no greeting needed
   ghostSilenceAll();
 }
 
@@ -228,6 +258,18 @@ float gardenCents(int idxOldest) {
   return s_ring[idx].cents;
 }
 
+void gardenRestore(const float* cents, int n) {
+  if (n > kGardenCap) n = kGardenCap;
+  for (int i = 0; i < n; ++i) s_ring[i] = {cents[i]};
+  s_head = n % kGardenCap;
+  s_count = n;
+  // deliberately NOT s_played — a restored garden waits for a human act
+}
+
+void scheduleGreeting() {
+  if (s_count > 0 && !s_played) s_greetAtMs = millis() + 2500;
+}
+
 void backgroundToggleNote(float cents) {
   s_bgCustom = true;
   for (int i = 0; i < s_bgCount; ++i) {
@@ -257,6 +299,17 @@ void backgroundSetEnabled(bool on) {
 void backgroundRefresh() { backgroundApplyAll(); }
 bool backgroundEnabled() { return s_bgOn; }
 int backgroundCount() { return s_bgCount; }
+bool backgroundIsCustom() { return s_bgCustom; }
+
+void backgroundRestoreChord(const float* cents, int n) {
+  if (n < 1 || n > 4) return;
+  for (int i = 0; i < s_bgCount; ++i) s_engine->noteOff(s_bg[i].id);
+  s_bgCount = n;
+  s_bgCustom = true;  // a remembered chord is law, like a hand-picked one
+  for (int i = 0; i < n; ++i)
+    s_bg[i] = {cents[i], 1000 + (s_bgNextId++ & 15)};
+  backgroundApplyAll();
+}
 
 void setCutoffBase(float hz) { s_cutoffBase = ga::clampf(hz, 300.0f, 12000.0f); }
 

@@ -1,0 +1,25 @@
+// The heart: pulse entrainment, ported from the host (live_main.cpp).
+// The box never imposes a tempo — it follows yours. Play a few even
+// notes and a quiet MUSICBOX heartbeat joins in, phase-locked to YOUR
+// presses (a PLL, not a metronome); stop, or drift into rubato, and it
+// lets go within a few beats. The ghosts remember the last pulse and
+// sow their memories on that beat grid.
+#pragma once
+#include "ga_engine.h"
+
+namespace pulse {
+
+void init(ga::Engine* engine);
+void onOnset();  // every real key-down (grid notes only)
+void tick();     // once per main-loop pass
+
+bool ticking();
+// the ghost beat grid: last stable period (0 = never entrained) and the
+// time of the last onset, both in seconds of millis()
+double memoryPeriodSec();
+double lastOnsetSec();
+// soul: yesterday's period comes back with the box (memory only — the
+// heart itself still waits for real even presses)
+void restoreMemory(double periodSec);
+
+}  // namespace pulse

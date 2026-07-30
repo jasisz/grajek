@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "../ambient.h"
+#include "../pulse.h"
 #include "../settings.h"
 #include "../viz.h"
 #include "ga_dsp.h"
@@ -99,6 +100,7 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
   const int gridCol = row == 0 ? col + 1 : col;
   if (down) {
     ambient::notePresence();
+    pulse::onOnset();  // even presses summon the heart, in YOUR tempo
     const int gridRow = 3 - row;
     const float cents = gridToCents(settings::scale(), gridCol, gridRow);
     ctx.engine.noteOn(id, cents, 0.9f);

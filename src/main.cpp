@@ -14,7 +14,9 @@
 #include "modes/mode_instrument.h"
 #include "modes/mode_settings.h"
 #include "modes/mode_sing.h"
+#include "pulse.h"
 #include "settings.h"
+#include "soul.h"
 
 namespace {
 
@@ -109,11 +111,15 @@ void setup() {
   // the ambient brain: background chord, weather, ghost garden — alive from
   // boot, in the menu too (the box hums the moment it wakes up)
   ambient::init(&engine);
+  pulse::init(&engine);  // the heart waits for a few even key presses
 
   // zapamiętane wybory (skala, barwa, oktawa, tło) wracają po włączeniu
   settings::load();
   settings::applyToEngine(engine);
   if (!settings::backgroundOn()) ambient::backgroundSetEnabled(false);
+  // ...i dusza: ogród wspomnień, własne tło, puls — z jednym cichym
+  // powitaniem wczorajszą nutą (patrz soul.h)
+  soul::load();
 
   input::keysInit();
 
@@ -197,6 +203,7 @@ void loop() {
   }
 
   ambient::tick();
+  pulse::tick();
 
   delay(2);  // breathing room for WDT/USB; audio lives on the other core anyway
 }
