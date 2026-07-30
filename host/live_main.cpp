@@ -228,8 +228,10 @@ void earInCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf,
     const float* v = (const float*)buf->mAudioData;
     const int n = (int)(buf->mAudioDataByteSize / sizeof(float));
     micPush(v, n);
+    // RING, not a tape end: the count grows monotonically and writes wrap —
+    // a linear buffer froze the duet after its 2 s filled up
     uint32_t c = g_capCount.load(std::memory_order_relaxed);
-    for (int i = 0; i < n && c < kCapMax; ++i) g_capBuf[c++] = v[i];
+    for (int i = 0; i < n; ++i) g_capBuf[(c++) % kCapMax] = v[i];
     g_capCount.store(c, std::memory_order_release);
   }
   AudioQueueEnqueueBuffer(q, buf, 0, nullptr);
@@ -817,17 +819,20 @@ void duetHumOff() {
 
 void duetTick(const Ui& ui) {
   if (!g_earOpen.load(std::memory_order_relaxed)) return;
-  const uint32_t n =
-      std::min(g_capCount.load(std::memory_order_acquire), kCapMax);
-  if (n < g_duet.analyzed + 1024) return;  // wait for fresh audio
+  const uint32_t n = g_capCount.load(std::memory_order_acquire);
+  if (n < 1024 || n < g_duet.analyzed + 1024) return;  // wait for fresh audio
   g_duet.analyzed = n;
-  const float* w = g_capBuf + (n - 1024);
+  // copy the freshest 1024 samples out of the ring into a straight window
+  float w[1024];
+  const uint32_t start = n - 1024;
+  for (int i = 0; i < 1024; ++i)
+    w[i] = g_capBuf[(start + (uint32_t)i) % kCapMax];
 
   double e0 = 0.0;
   for (int i = 0; i < 1024; ++i) e0 += (double)w[i] * (double)w[i];
   bool voiced = false;
   float hz = 0.0f;
-  if (sqrt(e0 / 1024.0) > 0.03) {
+  if (sqrt(e0 / 1024.0) > 0.015) {  // gentle gate — singing from a distance
     double acAll[601];
     double best = 0.0;
     for (int lag = 80; lag <= 600; ++lag) {
@@ -851,14 +856,23 @@ void duetTick(const Ui& ui) {
   }
 
   if (!voiced) {
-    if (g_duetOn.load(std::memory_order_relaxed) && ++g_duet.silent >= 4)
-      duetHumOff();  // the singer paused — the box bows out
+    // consonants and breaths are not the end of the song: bow out only
+    // after ~300 ms of true silence (analysis ticks every ~21 ms)
+    if (g_duetOn.load(std::memory_order_relaxed) && ++g_duet.silent >= 14)
+      duetHumOff();
     return;
   }
   g_duet.silent = 0;
   const float root =
       kBaseOctaves[ui.octave] * exp2f(g_sim.centerCents / 1200.0f);
-  const float cents = 1200.0f * log2f(hz / root);
+  float cents = 1200.0f * log2f(hz / root);
+  // octave-jitter guard: if the detector flipped a whole octave between
+  // ticks, fold the new reading back to the previous register
+  if (g_duet.lastCents < 1e8f) {
+    const float d = cents - g_duet.lastCents;
+    if (fabsf(fabsf(d) - 1200.0f) < 90.0f)
+      cents -= copysignf(1200.0f, d);
+  }
   if (fabsf(cents - g_duet.lastCents) < 80.0f) ++g_duet.stable;
   else g_duet.stable = 1;
   g_duet.lastCents = cents;
