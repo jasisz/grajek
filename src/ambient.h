@@ -30,6 +30,15 @@ void gardenRestore(const float* cents, int n);
 // starts playing first. Power-on is the human act that earns the greeting.
 void scheduleGreeting();
 
+// GOODNIGHT: laid face-down after playing, the garden sings itself to
+// sleep — the day's notes replayed once, slower and darker each time,
+// then real silence (tampura included). Lifting the box or any key wakes
+// it instantly. It NEVER wakes by itself, and never starts a lullaby
+// without play this session — the ritual answers a deliberate gesture.
+void lullabyStart();
+void lullabyAbort();   // lifted / played: wake now
+bool lullabyActive();  // Singing or the sleeping silence after
+
 // background chord (default 1/1 + 3/2; hand-picking makes the choice law)
 void backgroundToggleNote(float cents);
 void backgroundSetEnabled(bool on);

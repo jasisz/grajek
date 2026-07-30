@@ -7,6 +7,7 @@
 #include "../firefly.h"
 #include "../pulse.h"
 #include "../settings.h"
+#include "../soul.h"
 #include "../viz.h"
 #include "ga_dsp.h"
 #include "ga_scales.h"
@@ -167,6 +168,22 @@ void ModeInstrument::imuStep(ModeCtx& ctx) {
   const float lx = ax - s_gravX, ly = ay - s_gravY, lz = az - s_gravZ;
   const float e = sqrtf(lx * lx + ly * ly + lz * lz);
   s_shakeEnv += (e - s_shakeEnv) * 0.25f;
+
+  // DOBRANOC: położone ekranem w dół i nieruchome przez ~1.5 s — ogród
+  // śpiewa kołysankę (patrz ambient.h). Podniesienie budzi natychmiast.
+  static uint32_t s_faceDownSince = 0;
+  const uint32_t nowMs = millis();
+  if (s_gravZ < -0.75f && s_shakeEnv < 0.20f) {
+    if (s_faceDownSince == 0) s_faceDownSince = nowMs;
+    else if (nowMs - s_faceDownSince > 1500 && !ambient::lullabyActive()) {
+      soul::save();  // dobranoc utrwala dzień — zanim pudełko zaśnie
+      ambient::lullabyStart();
+    }
+  } else {
+    s_faceDownSince = 0;
+    if (ambient::lullabyActive()) ambient::lullabyAbort();
+  }
+  if (ambient::lullabyActive()) return;  // we śnie: bez dzwonków i przechyłów
 
   // MACHANIE: zamach powyżej progu gra dzwonek; następny dopiero, gdy ruch
   // opadnie (histereza) — jedno machnięcie = jeden dzwonek, nie seria

@@ -38,6 +38,14 @@ int s_ghostSlot = 0;
 // human act this session (a restored garden alone must stay silent)
 bool s_played = false;
 uint32_t s_greetAtMs = 0;  // the one waking-up note (soul), 0 = none
+
+// --- goodnight lullaby ---
+enum class Lull : uint8_t { None, Singing, Sleeping };
+Lull s_lull = Lull::None;
+uint32_t s_lullNextMs = 0;
+float s_lullGapSec = 0.0f;
+float s_lullVel = 0.0f;
+int s_lullIdx = 0;  // walks the garden oldest -> newest: the day, retold
 constexpr int32_t kGhostIdBase = 1100;
 // 7 s ciszy wystarczy — przy 12 s pamięć pudełka była praktycznie
 // niesłyszalna w normalnej zabawie (dziecko nie robi tak długich pauz)
@@ -108,8 +116,9 @@ void weatherTick(uint32_t nowMs) {
   s_engine->setParam(ga::Param::FilterCutoffHz,
                      ga::clampf(s_cutoffBase * ratio, 300.0f, 12000.0f));
 
-  // background voting (default set only — a hand-picked chord is law)
-  if (!s_bgCustom && s_bgOn && s_bgCount >= 2) {
+  // background voting (default set only — a hand-picked chord is law;
+  // asleep, the weather must not resurrect the tampura)
+  if (!s_bgCustom && s_bgOn && s_bgCount >= 2 && s_lull == Lull::None) {
     int want = s_fifthVariant;
     if (t2 > 0.6f) want = 1;
     else if (t2 < -0.6f) want = 0;
@@ -202,6 +211,28 @@ void gardenTick(uint32_t nowMs) {
   ghostPlay(cents, 0.26f + 0.16f * rnd01(), 1.2f, nowMs);
 }
 
+void lullabyTick(uint32_t nowMs) {
+  if (s_lull != Lull::Singing) return;
+  if ((int32_t)(nowMs - s_lullNextMs) < 0) return;
+  if (s_lullIdx >= s_count) {
+    // the day is retold — real sleep: the tampura bows out too (state
+    // s_bgOn untouched; waking reapplies the chord)
+    s_lull = Lull::Sleeping;
+    for (int i = 0; i < s_bgCount; ++i) s_engine->noteOff(s_bg[i].id);
+    return;
+  }
+  const int idx = (s_head - s_count + s_lullIdx + 2 * kGardenCap) % kGardenCap;
+  ghostPlay(s_ring[idx].cents, s_lullVel, 1.6f, nowMs);
+  ++s_lullIdx;
+  s_lullNextMs = nowMs + (uint32_t)(s_lullGapSec * 1000.0f);
+  s_lullGapSec *= 1.09f;             // each note a little later...
+  s_lullVel = fmaxf(0.10f, s_lullVel * 0.94f);  // ...and a little softer
+  // and the world darkens and recedes with it
+  const float prog = (float)s_lullIdx / (float)(s_count > 1 ? s_count : 1);
+  s_cutoffBase = ga::clampf(7500.0f * exp2f(-3.5f * prog), 600.0f, 12000.0f);
+  s_spaceBase = ga::clampf(0.5f + 0.4f * prog, 0.0f, 1.0f);
+}
+
 }  // namespace
 
 namespace ambient {
@@ -217,13 +248,37 @@ void tick() {
   if (!s_engine) return;
   const uint32_t now = millis();
   weatherTick(now);
-  gardenTick(now);
+  if (s_lull == Lull::None) gardenTick(now);  // the lullaby owns the night
+  else lullabyTick(now);
 }
+
+void lullabyStart() {
+  // only after real play this session, only with something to sing
+  if (s_lull != Lull::None || !s_played || s_count == 0) return;
+  s_lull = Lull::Singing;
+  s_lullIdx = 0;
+  s_lullGapSec = 1.2f;
+  s_lullVel = 0.30f;
+  s_lullNextMs = millis() + 600;
+  ghostSilenceAll();
+}
+
+void lullabyAbort() {
+  if (s_lull == Lull::None) return;
+  s_lull = Lull::None;
+  ghostSilenceAll();
+  s_cutoffBase = 7500.0f;  // the mode re-drives both from the next IMU step
+  s_spaceBase = 0.5f;
+  backgroundApplyAll();  // the tampura comes back with the morning
+}
+
+bool lullabyActive() { return s_lull != Lull::None; }
 
 void notePresence() {
   s_lastInputMs = millis();
   s_played = true;
   s_greetAtMs = 0;  // the child is already here — no greeting needed
+  if (s_lull != Lull::None) lullabyAbort();  // a key always wakes the box
   ghostSilenceAll();
 }
 
