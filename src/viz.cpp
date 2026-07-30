@@ -148,10 +148,22 @@ void reset() {
   for (auto& p : s_spark) p.active = false;
   s_seedHead = 0;
   s_tilt = 0.0f;
+  s_depth = 0.0f;
+  s_voiceLvl = 0.0f;
+  s_voiceGlow = 0.0f;
+  s_voiceMs = 0;
+  s_voiceTrailN = 0;
   s_toastT = 0.0f;
   s_lastMs = millis();
   s_meteor.active = false;
   s_listening = false;
+  // the audio garden is the source of truth and survives mode switches —
+  // replant its memories as seeds, so a peek into the settings screen no
+  // longer burns the meadow (call setPitchRange BEFORE reset: seed X
+  // positions depend on the octave fold)
+  const int n = ambient::gardenCount();
+  for (int i = 0; i < n; ++i)
+    dropSeed(xFromCents(ambient::gardenCents(i)));
   if (!s_starsInit) {
     s_starsInit = true;
     for (int i = 0; i < 18; ++i)
@@ -195,8 +207,10 @@ void chime(float cents, float vel) {
   const int y = yFromCents(cents);
   spawnSparks(x, y, 3 + (int)(vel * 5.0f), 1.0f);
   // krótki świetlik, żeby dzwonek miał ciałko, nie tylko iskry; ujemne id
-  // nie kolidują z siatką, a tryb zaraz przyśle noteOff przez pending-off
-  const int flyId = -(int)(s_rng & 0xff) - 1;
+  // nie kolidują z siatką — a counter instead of rng, so two fast chimes
+  // can't draw the same id and steal each other's firefly
+  static int s_chimeFlySeq = 0;
+  const int flyId = -1 - (s_chimeFlySeq++ & 0x3fff);
   noteOn(flyId, cents, vel);
   noteOff(flyId);  // od razu opada — zostaje po nim nasionko
 }
@@ -392,7 +406,8 @@ void drawKosmos(M5Canvas& g, const Frame& fr) {
     const float tw = 0.35f + 0.35f * fr.breathe +
                      0.2f * sinf((fr.t * 0.5f + st.phase) * 6.2832f);
     g.drawPixel(st.x, st.y, shade(190, 200, 255, tw));
-    g.drawPixel(st.x, st.y + 68, shade(190, 200, 255, tw * 0.8f));
+    if (st.y + 68 < kH)  // the mirrored star must not fall off the bottom
+      g.drawPixel(st.x, st.y + 68, shade(190, 200, 255, tw * 0.8f));
   }
   drawMeteor(g, 220, 240, 255);
 

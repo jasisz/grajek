@@ -15,9 +15,14 @@ void tick();  // call once per main-loop pass
 void notePresence();
 // a really played grid note, worth remembering for the ghosts
 void gardenPush(float cents);
-// wiatr: machanie wyrywa z ogrodu jedno wspomnienie (świeże częściej,
-// czasem oktawę/kwintę wyżej — jak duchy). false = ogród jeszcze pusty.
-bool gardenPluck(float* cents);
+// wind: a swing plucks one memory from the garden (fresh ones more often).
+// dir = the swing direction: >= 0 sprinkles transpositions upward, < 0
+// downward — the waving hand steers the melody. false = garden still empty.
+bool gardenPluck(float* cents, float dir);
+// read-only view of the memory ring for the visualization (seed replanting
+// after a scene reset); index 0 = oldest remembered note
+int gardenCount();
+float gardenCents(int idxOldest);
 
 // background chord (default 1/1 + 3/2; hand-picking makes the choice law)
 void backgroundToggleNote(float cents);

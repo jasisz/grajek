@@ -140,6 +140,9 @@ void tick(ga::Engine& e) {
   float comp = snapToGrid(snapped - 350.0f);  // celuj tercję niżej
   if (fabsf(comp - snapped) < 30.0f)
     comp = snapToGrid(snapped - 550.0f);  // awaryjnie coś koło kwarty
+  if (comp > snapped - 100.0f)
+    comp = snapped - 1200.0f;  // grid floor reached: hum the octave below,
+                               // never unison — the companion sits UNDER you
   if (!s_on || fabsf(comp - s_companion) > 25.0f) {
     // zaśpiewana (przyciągnięta do skali) nuta zostaje we wspomnieniach:
     // machanie po śpiewaniu rozsypuje twoją własną melodię

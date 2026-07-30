@@ -152,9 +152,11 @@ void gardenTick(uint32_t nowMs) {
   const int idx = (s_head - 1 - back + 2 * kGardenCap) % kGardenCap;
   float cents = s_ring[idx].cents;
   const float r = rnd01();
+  // transpositions balanced both ways — with up-only sprinkles a quarter
+  // hour of play drifted the memories into squeaks
   if (r < 0.40f) { /* as played */ }
-  else if (r < 0.70f) cents += 1200.0f;
-  else if (r < 0.85f) cents += 702.0f;
+  else if (r < 0.65f) cents += 1200.0f;
+  else if (r < 0.80f) cents += 702.0f;
   else cents -= 498.0f;
 
   const int slot = s_ghostSlot++ & 3;
@@ -201,21 +203,29 @@ void gardenPush(float cents) {
   if (s_count < kGardenCap) ++s_count;
 }
 
-bool gardenPluck(float* cents) {
+bool gardenPluck(float* cents, float dir) {
   if (s_count == 0) return false;
   const float u = rnd01();
   const int back = (int)(u * u * (float)(s_count - 1));  // świeże częściej
   const int idx = (s_head - 1 - back + 2 * kGardenCap) % kGardenCap;
   float c = s_ring[idx].cents;
   const float r = rnd01();
-  // przewaga „jak zagrano": machanie ma być SŁYSZALNIE powtórką tego, co
-  // dziecko zagrało — transpozycje tylko na okrasę, bo za często rozmywały
-  // rozpoznawalność melodii
+  // replay-first stays law (hardware verdict: transpositions blurred the
+  // melody) — but the seasoning follows the hand: waving one way sprinkles
+  // upward, the other way downward. The wind finally steers the memories.
   if (r < 0.78f) { /* jak zagrano */ }
-  else if (r < 0.92f) c += 1200.0f;
-  else c += 702.0f;
+  else if (dir >= 0.0f) c += r < 0.92f ? 1200.0f : 702.0f;
+  else                  c -= r < 0.92f ? 498.0f : 1200.0f;
   if (cents) *cents = c;
   return true;
+}
+
+int gardenCount() { return s_count; }
+
+float gardenCents(int idxOldest) {
+  if (idxOldest < 0 || idxOldest >= s_count) return 0.0f;
+  const int idx = (s_head - s_count + idxOldest + 2 * kGardenCap) % kGardenCap;
+  return s_ring[idx].cents;
 }
 
 void backgroundToggleNote(float cents) {
