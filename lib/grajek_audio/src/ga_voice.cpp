@@ -47,6 +47,10 @@ Timbre timbrePreset(int idx) {
       t.shimmer = 0.4f;
       t.attack = 0.001f; t.decay = 0.9f; t.sustain = 0.0f; t.release = 0.6f;
       break;
+    case 5:  // VOICE — the caught grain of the player's own voice
+      t.useSample = true;
+      t.attack = 0.008f; t.decay = 0.3f; t.sustain = 0.85f; t.release = 0.5f;
+      break;
   }
   return t;
 }
@@ -76,14 +80,17 @@ void Voice::init(float sampleRate, uint32_t seed) {
 }
 
 void Voice::noteOn(int32_t id, float cents, float vel, const Timbre& t,
-                   float glideSec, uint32_t age) {
+                   float glideSec, uint32_t age, const VoiceSample* smp) {
+  smp_ = t.useSample ? smp : nullptr;
+  smpPos_ = 0.0f;
   const bool wasActive = env_.active();
   id_ = id;
   vel_ = clampf(vel, 0.0f, 1.0f);
   age_ = age;
   for (int k = 0; k < Timbre::kPartials; ++k) {
     ratio_[k] = t.ratio[k];
-    gain_[k] = t.gain[k];
+    // VOICE preset with no grain caught yet: silent, not a fallback sine
+    gain_[k] = (t.useSample && !smp_) ? 0.0f : t.gain[k];
     det_[k] = (k == 0) ? 0.0f : rnd11() * t.detuneCents;
     pdecay_[k] = t.pdecay[k];
     pamp_[k] = 1.0f;
@@ -112,6 +119,38 @@ void Voice::render(float* out, int n, float baseHz, float bendRatio) {
   }
 
   const float f0 = baseHz * centsToRatio(cents_) * bendRatio;
+
+  // VOICE mode: loop the caught grain with a crossfade, tape-repitched so
+  // its detected fundamental lands on this note's frequency.
+  if (smp_ && smp_->data && smp_->frames > 64 && smp_->rootHz > 1.0f) {
+    const float len = (float)smp_->frames;
+    float rate = f0 / smp_->rootHz;
+    rate = clampf(rate, 0.05f, 20.0f);
+    const float fade = len > 2048.0f ? 256.0f : len * 0.125f;
+    const float loopStart = len - fade;
+    const int16_t* d = smp_->data;
+    const uint32_t last = smp_->frames - 1;
+    auto at = [&](float p) {
+      const uint32_t i0 = (uint32_t)p;
+      const uint32_t i1 = i0 < last ? i0 + 1 : last;
+      const float fr = p - (float)i0;
+      return ((float)d[i0] * (1.0f - fr) + (float)d[i1] * fr) *
+             (1.0f / 32768.0f);
+    };
+    for (int i = 0; i < n; ++i) {
+      const float e = env_.process();
+      float s = at(smpPos_);
+      if (smpPos_ >= loopStart) {  // crossfade the seam
+        const float a = (smpPos_ - loopStart) / fade;
+        s = s * (1.0f - a) + at(smpPos_ - loopStart) * a;
+      }
+      out[i] += s * 0.9f * vel_ * e;
+      smpPos_ += rate;
+      if (smpPos_ >= len) smpPos_ -= loopStart;
+    }
+    return;
+  }
+
   uint32_t inc[Timbre::kPartials];
   float g[Timbre::kPartials];
   for (int k = 0; k < Timbre::kPartials; ++k) {

@@ -7,6 +7,16 @@
 
 namespace ga {
 
+// A caught grain of the player's voice (or any sound): caller-owned buffer,
+// looped with a crossfade and tape-repitched onto the grid. Published to the
+// engine via an atomic pointer; the struct and data must stay valid while
+// any voice may still be reading them (double-buffer on the caller side).
+struct VoiceSample {
+  const int16_t* data;
+  uint32_t frames;
+  float rootHz;  // detected fundamental of the grain
+};
+
 struct Timbre {
   static constexpr int kPartials = 4;
   float ratio[kPartials]  = {1.0f, 2.0f, 3.0f, 4.0f};    // f0 multipliers
@@ -22,20 +32,23 @@ struct Timbre {
   float decay   = 0.3f;
   float sustain = 0.85f;
   float release = 0.6f;
+  // VOICE preset: play the caught sample instead of sine partials
+  bool useSample = false;
 };
 
 // 0 = PURE (clean tone), 1 = DRONE (octaves, strong beating, slow envelope),
 // 2 = REED (odd harmonics, fast attack), 3 = CHIME (music-box ping melting
 // into a pure tone), 4 = MUSICBOX (percussive plucked tine — bright, ends
-// by itself, made for rhythmic playing)
-constexpr int kNumTimbrePresets = 5;
+// by itself, made for rhythmic playing), 5 = VOICE (the caught grain of the
+// player's own voice, repitched onto the grid)
+constexpr int kNumTimbrePresets = 6;
 Timbre timbrePreset(int idx);
 
 class Voice {
  public:
   void init(float sampleRate, uint32_t seed);
   void noteOn(int32_t id, float cents, float vel, const Timbre& t,
-              float glideSec, uint32_t age);
+              float glideSec, uint32_t age, const VoiceSample* smp = nullptr);
   void noteOff() { env_.noteOff(); }
   void kill() { env_.reset(); }
   bool active() const { return env_.active(); }
@@ -63,6 +76,8 @@ class Voice {
   float lfoInc_[Timbre::kPartials] = {0.0f};   // turns per sample
   float shimmer_ = 1.0f;
   float detLimit_ = 0.3f;
+  const VoiceSample* smp_ = nullptr;  // non-null = play the sample instead
+  float smpPos_ = 0.0f;
   float cents_ = 0.0f;
   float targetCents_ = 0.0f;
   float glideSec_ = 0.0f;

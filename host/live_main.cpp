@@ -211,13 +211,91 @@ float micPop() {
   return v;
 }
 
+// VOICE capture: while the ear is open, the last ~2 s of the mic also land
+// in a analysis buffer; on close we hunt for the loudest pitch-stable window
+// and the keyboard starts singing with the player's own voice.
+constexpr uint32_t kCapMax = 96000;  // 2 s @ 48 kHz
+float g_capBuf[kCapMax];
+std::atomic<uint32_t> g_capCount{0};
+
+int16_t g_voiceSlots[2][16384];  // double buffer: voices may still read old
+VoiceSample g_voiceSamples[2];
+int g_voiceSlot = 0;
+bool g_hasVoice = false;
+
 void earInCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf,
                    const AudioTimeStamp*, UInt32,
                    const AudioStreamPacketDescription*) {
-  if (g_earOpen.load(std::memory_order_relaxed))
-    micPush((const float*)buf->mAudioData,
-            (int)(buf->mAudioDataByteSize / sizeof(float)));
+  if (g_earOpen.load(std::memory_order_relaxed)) {
+    const float* v = (const float*)buf->mAudioData;
+    const int n = (int)(buf->mAudioDataByteSize / sizeof(float));
+    micPush(v, n);
+    uint32_t c = g_capCount.load(std::memory_order_relaxed);
+    for (int i = 0; i < n && c < kCapMax; ++i) g_capBuf[c++] = v[i];
+    g_capCount.store(c, std::memory_order_release);
+  }
   AudioQueueEnqueueBuffer(q, buf, 0, nullptr);
+}
+
+// Find the loudest pitch-stable window (autocorrelation, 80..600 Hz) and cut
+// a grain of whole periods (~140 ms) out of it. Returns false if nothing in
+// the take held a clear tone.
+bool voiceAnalyze(float* outRootHz, int16_t* dst, uint32_t dstCap,
+                  uint32_t* outLen) {
+  const uint32_t nCap =
+      g_capCount.load(std::memory_order_acquire) < kCapMax
+          ? g_capCount.load(std::memory_order_acquire)
+          : kCapMax;
+  if (nCap < 4096) return false;
+  double bestClarity = 0.0;
+  int bestStart = -1;
+  float bestHz = 0.0f;
+  for (uint32_t w = 0; w + 2048 <= nCap; w += 1024) {
+    double e0 = 0.0;
+    for (int i = 0; i < 2048; ++i) {
+      const double v = g_capBuf[w + i];
+      e0 += v * v;
+    }
+    if (sqrt(e0 / 2048.0) < 0.02) continue;  // too quiet to trust
+    double best = 0.0;
+    int bestLag = 0;
+    for (int lag = 80; lag <= 600; ++lag) {  // 600..80 Hz
+      double ac = 0.0;
+      for (int i = 0; i + lag < 2048; i += 2)
+        ac += (double)g_capBuf[w + i] * (double)g_capBuf[w + i + lag];
+      ac *= 2.0;
+      if (ac > best) {
+        best = ac;
+        bestLag = lag;
+      }
+    }
+    const double clarity = e0 > 0.0 ? best / e0 : 0.0;
+    if (clarity > bestClarity) {
+      bestClarity = clarity;
+      bestStart = (int)w;
+      bestHz = (float)kSr / (float)bestLag;
+    }
+  }
+  if (bestStart < 0 || bestClarity < 0.5 || bestHz < 70.0f || bestHz > 700.0f)
+    return false;
+  const float period = (float)kSr / bestHz;
+  int periods = (int)(0.14f * bestHz + 0.5f);
+  if (periods < 4) periods = 4;
+  uint32_t glen = (uint32_t)((float)periods * period + 0.5f);
+  while (glen > dstCap || (uint32_t)bestStart + glen > nCap) {
+    glen -= (uint32_t)(period + 0.5f);
+    if (glen < (uint32_t)(4.0f * period)) return false;
+  }
+  float peak = 1e-6f;
+  for (uint32_t i = 0; i < glen; ++i)
+    peak = fmaxf(peak, fabsf(g_capBuf[bestStart + i]));
+  const float g = 0.8f / peak;
+  for (uint32_t i = 0; i < glen; ++i)
+    dst[i] = (int16_t)(clampf(g_capBuf[bestStart + i] * g, -1.0f, 1.0f) *
+                       32767.0f);
+  *outRootHz = bestHz;
+  *outLen = glen;
+  return true;
 }
 
 bool earOpen() {
@@ -257,6 +335,7 @@ bool earOpen() {
   }
   g_micHead.store(0);
   g_micTail.store(0);
+  g_capCount.store(0);  // a fresh take for the voice hunter
   if (AudioQueueStart(g_inQueue, nullptr) != noErr) {
     AudioQueueDispose(g_inQueue, true);
     g_inQueue = nullptr;
@@ -418,8 +497,8 @@ double nowSec() {
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
-const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED",
-                                               "CHIME", "MUSICBOX"};
+const char* kPresetNames[kNumTimbrePresets] = {"PURE",  "DRONE",    "REED",
+                                               "CHIME", "MUSICBOX", "VOICE"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 
 // JI ladder for toss landings; sign of spin mirrors it downward (utonal).
@@ -743,6 +822,30 @@ void printStatus(const Ui& ui) {
 void allOff() {
   g_engine.allNotesOff();
   for (auto& n : g_notes) n = NoteState{};
+}
+
+// After the ear closes: hunt the take for a voice grain and, if found, the
+// keyboard starts singing with it immediately — no extra steps, a child
+// sings "aaa" and the grid speaks their voice. Nothing touches the disk.
+void voiceCapture(Ui& ui) {
+  float hz = 0.0f;
+  uint32_t len = 0;
+  const int slot = g_voiceSlot ^ 1;  // voices may still read the old slot
+  if (!voiceAnalyze(&hz, g_voiceSlots[slot], 16384, &len)) {
+    if (g_capCount.load() > 24000)  // there was a real take, just no tone
+      printf("\n  >> nie zlapalem czystego tonu — sprobuj dluzsze 'aaa'\n");
+    return;
+  }
+  g_voiceSamples[slot] = {g_voiceSlots[slot], len, hz};
+  g_engine.setVoiceSample(&g_voiceSamples[slot]);
+  g_voiceSlot = slot;
+  g_hasVoice = true;
+  ui.preset = 5;
+  g_uiPreset = 5;
+  g_engine.setParam(Param::TimbrePreset, 5.0f);
+  printf("\n  >> VOICE zlapany (~%.0f Hz, %.0f ms) — klawiatura spiewa"
+         " twoim glosem! (` = inne barwy)\n",
+         (double)hz, 1000.0 * (double)len / kSr);
 }
 
 // --- the soul: grajek remembers you across sessions ---
@@ -1081,6 +1184,9 @@ int main(int argc, char** argv) {
          "          i poglos, a po puszczeniu wraca coraz ciszej; sluchawki\n"
          "          zalecane (glosniki = sprzezenie); mikrofon dziala TYLKO\n"
          "          gdy trzymasz, nic nie jest zapisywane\n");
+  printf("  VOICE:  zaspiewaj w ucho rowne 'aaa' — po puszczeniu klawiatura\n"
+         "          SPIEWA TWOIM GLOSEM w czystym stroju (barwa VOICE);\n"
+         "          kazde nowe 'aaa' podmienia glos, ` wraca do syntezy\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
@@ -1175,6 +1281,7 @@ int main(int argc, char** argv) {
       } else if (c == '`') {
         if (g_age > 0) {
           ui.preset = (ui.preset + 1) % kNumTimbrePresets;
+          if (ui.preset == 5 && !g_hasVoice) ui.preset = 0;  // no grain yet
           g_uiPreset = ui.preset;
           g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
         }
@@ -1348,6 +1455,7 @@ int main(int argc, char** argv) {
         nowSec() > g_earHeldUntil) {
       earClose();
       printf("\n  >> ucho zamkniete — sluchaj, jak wraca\n");
+      voiceCapture(ui);
       printStatus(ui);
       lastStatusAt = nowSec();
     }

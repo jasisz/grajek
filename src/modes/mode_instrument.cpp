@@ -11,8 +11,8 @@
 using namespace ga;
 
 namespace {
-const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED",
-                                               "CHIME", "MUSICBOX"};
+const char* kPresetNames[kNumTimbrePresets] = {"PURE",  "DRONE",    "REED",
+                                               "CHIME", "MUSICBOX", "VOICE"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 constexpr float kImuPeriod = 0.02f;  // 50 Hz IMU reads
 constexpr float kNeutralCutoff = 7500.0f;
@@ -116,6 +116,8 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
         break;
       case 1:
         preset_ = (preset_ + 1) % kNumTimbrePresets;
+        // VOICE only exists once a grain is caught (device mic path: v2)
+        if (preset_ == 5 && !ctx.engine.hasVoiceSample()) preset_ = 0;
         ctx.engine.setParam(Param::TimbrePreset, (float)preset_);
         ambient::setPreset(preset_);
         break;
