@@ -416,6 +416,19 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
   g_looper.process(samples, samples, frames);
   // Reverb last, so the loop and echo sit in the same room.
   g_reverb.process(samples, frames);
+  // Walkie-talkie anti-feedback: while the ear is open the OUTPUT ducks to
+  // near-silence (the tape and strings still receive the full-level voice),
+  // so the mic->speaker->mic loop physically cannot close — and when you
+  // release, the volume swells back and the box "answers". On the device
+  // (mic 2 cm from the speaker) this is the difference between an
+  // instrument and a howl.
+  static float duck = 1.0f;
+  const float duckTarget =
+      g_earOpen.load(std::memory_order_relaxed) ? 0.12f : 1.0f;
+  for (int i = 0; i < frames; ++i) {
+    duck += 0.0008f * (duckTarget - duck);  // ~30 ms ramp, no clicks
+    samples[i] *= duck;
+  }
   // final glue clip — stacked layers can sum hot; keep the edge soft
   // (device adds a stricter child-ear ceiling on top of this)
   for (int i = 0; i < frames; ++i)
@@ -1180,10 +1193,11 @@ int main(int argc, char** argv) {
          "          polnuty/osemki), a gdy przestajesz — samo puszcza\n");
   printf("  WIEK:   SHIFT+A cykluje 2-3 / 4-6 / 7+ — pudelko rosnie z\n"
          "          dzieckiem (maluch: pentatonika i zero pokretel)\n");
-  printf("  UCHO:   TRZYMAJ SHIFT+M i spiewaj — glos wpada w tasme, struny\n"
-         "          i poglos, a po puszczeniu wraca coraz ciszej; sluchawki\n"
-         "          zalecane (glosniki = sprzezenie); mikrofon dziala TYLKO\n"
-         "          gdy trzymasz, nic nie jest zapisywane\n");
+  printf("  UCHO:   TRZYMAJ SHIFT+M i spiewaj — jak walkie-talkie: podczas\n"
+         "          sluchania pudelko sie przycisza (zero sprzezenia), po\n"
+         "          puszczeniu ODPOWIADA — glos wraca z tasmy, strun i\n"
+         "          poglosu; mikrofon dziala TYLKO gdy trzymasz, nic nie\n"
+         "          jest zapisywane\n");
   printf("  VOICE:  zaspiewaj w ucho rowne 'aaa' — po puszczeniu klawiatura\n"
          "          SPIEWA TWOIM GLOSEM w czystym stroju (barwa VOICE);\n"
          "          kazde nowe 'aaa' podmienia glos, ` wraca do syntezy\n");
