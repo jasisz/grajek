@@ -29,10 +29,13 @@ Mode* modes[4] = {&modeInstrument, &modeLoop, &modeDrone, &modeIr};
 int currentMode = -1;  // -1 = menu
 bool menuDirty = true;
 bool audioOk = false;
+bool displayOk = false;  // M5GFX autodetect can fail — never draw blind:
+                         // pushSprite on a panel-less display hard-crashes
 uint32_t lastFrameMs = 0;
 uint32_t lastTickMs = 0;
 
 void drawMenu() {
+  if (!displayOk) return;
   canvas.fillSprite(TFT_BLACK);
   canvas.setTextSize(2);
   canvas.setTextColor(TFT_ORANGE, TFT_BLACK);
@@ -79,14 +82,29 @@ void setup() {
   cfg.internal_mic = false;  // mic comes later with the LOOP mode
   cfg.internal_imu = true;
   M5Cardputer.begin(cfg, true);
-  M5Cardputer.Display.setRotation(1);
-  M5Cardputer.Display.setBrightness(160);
+  // Diagnose the display before touching it: if the M5GFX autodetect did
+  // not bind a panel, every pushSprite is a hard crash (boot loop).
+  displayOk = M5Cardputer.Display.getPanel() != nullptr &&
+              M5Cardputer.Display.width() > 0;
+  Serial.printf("grajek: board=%d display=%dx%d panel=%p -> %s\n",
+                (int)M5.getBoard(), M5Cardputer.Display.width(),
+                M5Cardputer.Display.height(),
+                (void*)M5Cardputer.Display.getPanel(),
+                displayOk ? "OK" : "NO PANEL (autodetect failed)");
+  if (displayOk) {
+    M5Cardputer.Display.setRotation(1);
+    M5Cardputer.Display.setBrightness(160);
+  }
   age::load();
 
-  canvas.setPsram(false);  // StampS3A has no PSRAM — allocate in internal RAM
-  canvas.setColorDepth(8);  // 8-bit color frees ~32 KB for the echo tape
-  if (!canvas.createSprite(240, 135))
-    Serial.println("grajek: canvas allocation FAILED");
+  if (displayOk) {
+    canvas.setPsram(false);  // StampS3A has no PSRAM — internal RAM
+    canvas.setColorDepth(8);  // 8-bit color frees ~32 KB for the echo tape
+    if (!canvas.createSprite(240, 135)) {
+      Serial.println("grajek: canvas allocation FAILED");
+      displayOk = false;
+    }
+  }
 
   engine.init(48000.0f);
   engine.setParam(ga::Param::FilterCutoffHz, 7500.0f);
@@ -150,7 +168,7 @@ void loop() {
     for (int i = 0; i < n; ++i) m->onKey(ctx, ev[i].col, ev[i].row, ev[i].down);
     m->tick(ctx, dt);
 
-    if (m->dirty() && now - lastFrameMs >= 40) {  // ~25 fps max
+    if (displayOk && m->dirty() && now - lastFrameMs >= 40) {  // ~25 fps max
       m->draw(ctx);
       canvas.pushSprite(0, 0);
       m->clearDirty();
