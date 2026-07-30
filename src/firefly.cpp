@@ -74,6 +74,45 @@ void ghost(float cents) {
   s_dark = false;
 }
 
+void hello() {
+  // one soft warm glow right after power-on: "I am awake" — and it shows
+  // the parent where the firefly lives. Fades out by itself via tick().
+  s_r = 0.55f;
+  s_g = 0.42f;
+  s_b = 0.20f;
+  s_decayPerSec = 1.2f;
+  s_dark = false;
+}
+
+void selfTest() {
+  // serial diag 'f': R, G, B, W at two backlight levels — proves the LED
+  // exists and where it shines. ADV gotcha (docs): the WS2812's power
+  // rail sits behind an electronic switch driven by G38 — the SAME pin
+  // M5GFX PWMs as the display backlight. At brightness 160 the LED's
+  // supply is chopped; phase 2 runs at 255 (G38 solid high) to tell a
+  // dead LED from a starved one. Blocking (~4 s), diagnostics only.
+  static constexpr uint8_t seq[4][3] = {
+      {180, 0, 0}, {0, 180, 0}, {0, 0, 180}, {150, 150, 150}};
+  const uint8_t bright = M5.Display.getBrightness();
+  Serial.println("grajek: diag swietlik R/G/B/W przy zwyklym podswietleniu...");
+  for (auto& c : seq) {
+    rgbLedWrite((uint8_t)hal::kPinRgbLed, c[0], c[1], c[2]);
+    delay(500);
+  }
+  Serial.println("grajek: ...i przy pelnym (G38 = zasilanie diody!)");
+  M5.Display.setBrightness(255);
+  delay(50);
+  for (auto& c : seq) {
+    rgbLedWrite((uint8_t)hal::kPinRgbLed, c[0], c[1], c[2]);
+    delay(500);
+  }
+  rgbLedWrite((uint8_t)hal::kPinRgbLed, 0, 0, 0);
+  M5.Display.setBrightness(bright);
+  s_wr = s_wg = s_wb = 0;
+  s_dark = true;
+  Serial.println("grajek: diag swietlik koniec (widziales 1. czy 2. serie?)");
+}
+
 void tick() {
   const uint32_t now = millis();
   if (now - s_lastTickMs < 20) return;  // ~50 Hz is plenty for one LED

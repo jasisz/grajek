@@ -31,6 +31,10 @@ class ModeInstrument : public Mode {
   void tick(ModeCtx&, float dt) override;
   void draw(ModeCtx&) override;
 
+  // when the wind of memories last chimed — SPIEW keeps the ear closed
+  // until the rattle rings out
+  static uint32_t lastChimeMs();
+
  private:
   void imuStep(ModeCtx&);
   void triggerChime(ModeCtx&, float energy, float dir);

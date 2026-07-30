@@ -26,6 +26,9 @@ class ModeSing : public ModeInstrument {
   uint32_t lastVoiceMs_ = 0;
   uint32_t cooldownUntil_ = 0;
   uint32_t answerStartMs_ = 0;
+  uint32_t listenStartMs_ = 0;
   bool heardVoice_ = false;
+  bool dormant_ = false;  // a voiceless window fell asleep; a key wakes it
   int trackIdx_ = 0;
+  int heldCount_ = 0;  // no listening window while a key is held
 };

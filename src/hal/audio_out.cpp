@@ -53,12 +53,16 @@ std::atomic<bool> s_voicePresent{false};
 constexpr float kVoiceOn = 0.045f;
 constexpr float kVoiceOff = 0.020f;
 
-// the answer buffer: first kAnswerSeconds of the captured voice (a sung
-// phrase ends well within it — the window closes ~350 ms after silence)
+// the answer buffer: kAnswerSeconds of voice, recorded from the moment a
+// voice actually APPEARS (with a 250 ms pre-roll from the analysis ring) —
+// not from the window open, or a child who hesitates 3 s would be answered
+// with amplified room noise
 int16_t* s_answer = nullptr;
 std::atomic<int> s_answerLen{0};
 std::atomic<bool> s_answerActive{false};
 std::atomic<bool> s_answerRestart{false};
+std::atomic<uint32_t> s_ansOrigin{0};  // window sample index of s_answer[0]
+bool s_ansStarted = false;  // written by the pump (core 0) only
 
 // mic capture stats for diag 'x'
 std::atomic<uint32_t> s_micSamples{0};
@@ -175,7 +179,16 @@ void pumpChunk(const int16_t* in, int n) {
     lvl += (a > lvl ? 0.03f : 0.0006f) * (a - lvl);
     if (lvl > kVoiceOn) present = true;
     else if (lvl < kVoiceOff) present = false;
-    if (s_answer && alen < aCap) s_answer[alen++] = (int16_t)raw;
+    if (s_answer && !s_ansStarted && present) {
+      // the voice just appeared: start the answer here, with the attack
+      // rescued from the analysis ring (250 ms pre-roll)
+      s_ansStarted = true;
+      const uint32_t pre = c > 4000u ? 4000u : c;
+      s_ansOrigin.store(c - pre, std::memory_order_relaxed);
+      for (uint32_t k = c - pre; k < c && alen < aCap; ++k)
+        s_answer[alen++] = (int16_t)(s_cap[k & (kCapSize - 1)] * 32767.0f);
+    }
+    if (s_answer && s_ansStarted && alen < aCap) s_answer[alen++] = (int16_t)raw;
   }
   s_capCount.store(c, std::memory_order_release);
   s_earLevel.store(lvl, std::memory_order_relaxed);
@@ -191,9 +204,11 @@ void audioTask(void*) {
   static int16_t stereo[hal::kAudioFrames * 2];
   static int16_t micBuf[kMicChunk];
   float envLocal = 0.0f;
-  float ansPos = 0.0f;  // answer playhead, in mic samples (x3 upsample)
+  float ansPos = 0.0f;    // answer playhead, in mic samples (x3 upsample)
+  float parkGain = 1.0f;  // ~8 ms fade before the bus is handed to the mic
   for (;;) {
-    if (s_txPaused.load(std::memory_order_relaxed)) {
+    const bool pauseReq = s_txPaused.load(std::memory_order_relaxed);
+    if (pauseReq && parkGain <= 0.0f) {
       // WINDOW: the mic owns the bus. The engine keeps draining its event
       // queue (ambient ticks on), the effects stay frozen mid-thought —
       // the tape must not record the silence over the memories.
@@ -214,6 +229,11 @@ void audioTask(void*) {
       }
       continue;
     }
+
+    // epoch ack: the park flag is OURS to clear — if txResume cleared it,
+    // a stale ack could survive a fast close/open cycle and let core 1
+    // yank the channel from under a live i2s_channel_write
+    s_txParked.store(false, std::memory_order_relaxed);
 
     s_engine->process(fbuf, hal::kAudioFrames);
     // publish the dry-synth envelope for the weather system
@@ -251,6 +271,18 @@ void audioTask(void*) {
     s_strings.process(fbuf, fbuf, hal::kAudioFrames);
     if (s_tape) s_echoBridge.process(fbuf, hal::kAudioFrames);
     s_reverb.process(fbuf, hal::kAudioFrames);
+
+    // park fade: a requested listening window ramps the tail down over
+    // four blocks instead of letting the DMA click it off mid-sample
+    if (pauseReq) {
+      const float g1 = parkGain - 0.25f < 0.0f ? 0.0f : parkGain - 0.25f;
+      for (int i = 0; i < hal::kAudioFrames; ++i)
+        fbuf[i] *= parkGain +
+                   (g1 - parkGain) * (float)i * (1.0f / hal::kAudioFrames);
+      parkGain = g1;
+    } else {
+      parkGain = 1.0f;
+    }
 
     // speaker voicing, then the glue clip + child-ear ceiling
     for (int i = 0; i < hal::kAudioFrames; ++i) {
@@ -290,8 +322,9 @@ void txResume() {
   es8311InitPlayback();
   vTaskDelay(pdMS_TO_TICKS(20));
   i2s_channel_enable(s_tx);
+  // only release the pause — the audio task clears its own park ack the
+  // moment it re-enters the live path (epoch ack, no stale-flag race)
   s_txPaused.store(false, std::memory_order_relaxed);
-  s_txParked.store(false, std::memory_order_relaxed);
 }
 
 }  // namespace
@@ -335,12 +368,15 @@ bool earWindowOpen() {
   s_earLevel.store(0.0f, std::memory_order_relaxed);
   s_voicePresent.store(false, std::memory_order_relaxed);
   s_answerLen.store(0, std::memory_order_relaxed);
+  s_ansOrigin.store(0, std::memory_order_relaxed);
+  s_ansStarted = false;  // before the windowActive release-store: safe
   if (!M5.Mic.begin()) {  // codec ADC config happens in the M5Unified callback
     Serial.println("grajek: ucho: M5.Mic.begin FAILED");
     txResume();
     return false;
   }
   s_windowActive.store(true, std::memory_order_release);
+  Serial.println("grajek: ucho: okno OTWARTE (mikrofon ma magistrale)");
   return true;
 }
 
@@ -350,6 +386,8 @@ void earWindowClose() {
   vTaskDelay(pdMS_TO_TICKS(4));  // let the pump abandon its chunk
   M5.Mic.end();  // stops the mic task, powers the codec down (callback)
   txResume();
+  Serial.printf("grajek: ucho: okno zamkniete (probki=%u max=%d)\n",
+                (unsigned)s_micSamples.load(), s_micMax.load());
 }
 
 void earSetOpen(bool open) {
@@ -391,6 +429,10 @@ bool earAnswerStart() {
 
 bool earAnswerActive() {
   return s_answerActive.load(std::memory_order_relaxed);
+}
+
+uint32_t earAnswerOrigin() {
+  return s_ansOrigin.load(std::memory_order_relaxed);
 }
 
 void audioDiagWrite(uint8_t reg, uint8_t val) {

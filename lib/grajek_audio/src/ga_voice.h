@@ -68,6 +68,8 @@ class Voice {
   float lfoInc_[Timbre::kPartials] = {0.0f};   // turns per sample
   float shimmer_ = 1.0f;
   float detLimit_ = 0.3f;
+  bool bassOk_ = true;  // partials 2-3 imply f0 (see noteOn) — else the
+                        // virtual-pitch shift would rebuild the octave
   float cents_ = 0.0f;
   float targetCents_ = 0.0f;
   float glideSec_ = 0.0f;

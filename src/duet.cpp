@@ -17,8 +17,11 @@ constexpr int kWin = 1024;  // analysis window: 64 ms @ 16 kHz
 // voice threshold (RMS) — tune by ear on hardware together with the mic
 // magnification; too low and the box duets with the fan
 constexpr float kVoiceRms = 0.015f;
-// autocorrelation lags for 80..500 Hz at the 16 kHz mic rate
-constexpr int kLagLo = 32;
+// autocorrelation lags for 80..800 Hz at the 16 kHz mic rate — the top
+// must clear a child's playful head voice (C5+), or everything above
+// 500 Hz gets detected an octave down and the companion lands an octave
+// and a third UNDER the singer
+constexpr int kLagLo = 20;
 constexpr int kLagHi = 200;
 
 uint32_t s_analyzed = 0;
@@ -83,13 +86,13 @@ void tick() {
   float hz = 0.0f;
 
   if (rms > kVoiceRms) {
-    float acAll[kLagHi + 1];
+    float acAll[kLagHi + 2];
     float best = 0.0f;
-    for (int lag = kLagLo; lag <= kLagHi; ++lag) {
+    for (int lag = kLagLo; lag <= kLagHi + 1; ++lag) {
       float ac = 0.0f;
       for (int i = 0; i + lag < kWin; i += 2) ac += w[i] * w[i + lag];
       acAll[lag] = ac;
-      if (ac > best) best = ac;
+      if (lag <= kLagHi && ac > best) best = ac;
     }
     // pierwszy lag bliski maksimum = najniższa wiarygodna podstawa
     int bestLag = 0;
@@ -98,10 +101,31 @@ void tick() {
         bestLag = lag;
         break;
       }
-    const float clarity = e0 > 0.0f ? best / e0 : 0.0f;
+    // clarity normalized to the numerator's own term count: the sum uses
+    // every 2nd sample over (kWin-lag) — dividing by full-window energy
+    // made the threshold mean 0.62 at high lags but 0.75 at low ones, so
+    // a low parent voice needed to be much cleaner than a high child's
+    float e0even = 0.0f;
+    for (int i = 0; i < kWin; i += 2) e0even += w[i] * w[i];
+    const float norm =
+        bestLag > 0 ? e0even * (float)(kWin - bestLag) / (float)kWin : 0.0f;
+    const float clarity = norm > 0.0f ? best / norm : 0.0f;
     if (clarity > 0.30f && bestLag > 0) {
+      // parabolic peak interpolation: an integer lag quantizes pitch by
+      // up to ~27-53 c up the band — enough to snap to the WRONG 31-EDO
+      // step; the parabola through the neighbours recovers the fraction
+      float lagF = (float)bestLag;
+      if (bestLag > kLagLo) {
+        const float ym = acAll[bestLag - 1], y0 = acAll[bestLag],
+                    yp = acAll[bestLag + 1];
+        const float den = ym - 2.0f * y0 + yp;
+        if (fabsf(den) > 1e-9f) {
+          const float d = 0.5f * (ym - yp) / den;
+          if (d > -1.0f && d < 1.0f) lagF += d;
+        }
+      }
       voiced = true;
-      hz = hal::earSampleRate() / (float)bestLag;
+      hz = hal::earSampleRate() / lagF;
     }
   }
 

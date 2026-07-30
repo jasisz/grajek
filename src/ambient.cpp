@@ -6,6 +6,7 @@
 #include "ga_dsp.h"
 #include "hal/audio_out.h"
 #include "pulse.h"
+#include "soul.h"
 
 namespace {
 
@@ -43,6 +44,9 @@ uint32_t s_greetAtMs = 0;  // the one waking-up note (soul), 0 = none
 enum class Lull : uint8_t { None, Singing, Sleeping };
 Lull s_lull = Lull::None;
 uint32_t s_lullNextMs = 0;
+uint32_t s_lullSaveAtMs = 0;  // soul save, scheduled INTO the silence —
+                              // an NVS write stalls core 0 (flash cache)
+                              // and would scratch audibly mid-music
 float s_lullGapSec = 0.0f;
 float s_lullVel = 0.0f;
 int s_lullIdx = 0;  // walks the garden oldest -> newest: the day, retold
@@ -156,8 +160,10 @@ void ghostPlay(float cents, float vel, float attack, uint32_t nowMs) {
         nowMs + 2000 + (uint32_t)(2500.0f * rnd01()), id};
 }
 
-void gardenTick(uint32_t nowMs) {
-  // scheduled ghost note-offs
+// scheduled ghost note-offs — drained ALWAYS (also during the lullaby and
+// the sleep after it; starving these once left ghost chords humming all
+// night through the "real silence")
+void drainGhostOffs(uint32_t nowMs) {
   for (int i = 0; i < s_pendingCount;) {
     if ((int32_t)(nowMs - s_pending[i].atMs) >= 0) {
       s_engine->noteOff(s_pending[i].id);
@@ -166,7 +172,9 @@ void gardenTick(uint32_t nowMs) {
       ++i;
     }
   }
+}
 
+void gardenTick(uint32_t nowMs) {
   // the waking-up greeting: ONE remembered note, unless play began first
   if (s_greetAtMs && (int32_t)(nowMs - s_greetAtMs) >= 0) {
     s_greetAtMs = 0;
@@ -212,13 +220,24 @@ void gardenTick(uint32_t nowMs) {
 }
 
 void lullabyTick(uint32_t nowMs) {
+  if (s_lull == Lull::Sleeping) {
+    // the soul saves itself INTO the silence, once everything rang out
+    if (s_lullSaveAtMs && (int32_t)(nowMs - s_lullSaveAtMs) >= 0) {
+      s_lullSaveAtMs = 0;
+      soul::save();
+    }
+    return;
+  }
   if (s_lull != Lull::Singing) return;
   if ((int32_t)(nowMs - s_lullNextMs) < 0) return;
   if (s_lullIdx >= s_count) {
-    // the day is retold — real sleep: the tampura bows out too (state
-    // s_bgOn untouched; waking reapplies the chord)
+    // the day is retold — REAL sleep: the tampura bows out, the last
+    // lullaby ghosts are silenced too (their scheduled note-offs would
+    // otherwise never fire and the "silence" hummed a chord all night)
     s_lull = Lull::Sleeping;
     for (int i = 0; i < s_bgCount; ++i) s_engine->noteOff(s_bg[i].id);
+    ghostSilenceAll();
+    s_lullSaveAtMs = nowMs + 3000;  // save the day once the tails fade
     return;
   }
   const int idx = (s_head - s_count + s_lullIdx + 2 * kGardenCap) % kGardenCap;
@@ -248,6 +267,7 @@ void tick() {
   if (!s_engine) return;
   const uint32_t now = millis();
   weatherTick(now);
+  drainGhostOffs(now);  // in every state — ghosts must always ring out
   if (s_lull == Lull::None) gardenTick(now);  // the lullaby owns the night
   else lullabyTick(now);
 }
@@ -266,6 +286,7 @@ void lullabyStart() {
 void lullabyAbort() {
   if (s_lull == Lull::None) return;
   s_lull = Lull::None;
+  s_lullSaveAtMs = 0;  // aborted before sleep: next settings visit saves
   ghostSilenceAll();
   s_cutoffBase = 7500.0f;  // the mode re-drives both from the next IMU step
   s_spaceBase = 0.5f;
@@ -286,6 +307,10 @@ void gardenPush(float cents) {
   s_ring[s_head] = {cents};
   s_head = (s_head + 1) % kGardenCap;
   if (s_count < kGardenCap) ++s_count;
+  // every garden producer is a human act — keys, chimes AND singing (the
+  // duet pushes sung notes here); a sung-only session must still earn
+  // ghosts and the goodnight lullaby, like on the host
+  s_played = true;
 }
 
 bool gardenPluck(float* cents, float dir) {

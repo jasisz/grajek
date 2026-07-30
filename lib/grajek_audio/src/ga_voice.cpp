@@ -94,6 +94,23 @@ void Voice::noteOn(int32_t id, float cents, float vel, const Timbre& t,
   }
   shimmer_ = t.shimmer;
   detLimit_ = t.detuneCents;
+  // Virtual pitch needs the target partials to IMPLY f0: coprime integer
+  // ratios (2,3 / 3,5) leave a residue pitch at f0, but even-only stacks
+  // (DRONE and MUSICBOX use 2,4) share a factor of 2 and the ear rebuilds
+  // the OCTAVE instead — worse than losing the fundamental. Skip those.
+  {
+    const int r1 = (int)(t.ratio[1] + 0.5f);
+    const int r2 = (int)(t.ratio[2] + 0.5f);
+    const bool ints = fabsf(t.ratio[1] - (float)r1) < 0.01f &&
+                      fabsf(t.ratio[2] - (float)r2) < 0.01f;
+    int a = r1 > 0 ? r1 : 1, b = r2 > 0 ? r2 : 1;
+    while (b) {
+      const int r = a % b;
+      a = b;
+      b = r;
+    }
+    bassOk_ = ints && a == 1;
+  }
   env_.setTimes(t.attack, t.decay, t.sustain, t.release);
   targetCents_ = cents;
   glideSec_ = glideSec;
@@ -137,7 +154,7 @@ void Voice::render(float* out, int n, float baseHz, float bendRatio,
   // into partials 2-3 (harmonics of f0 in every preset) and the ear
   // reconstructs the missing fundamental. The note sounds AT its pitch
   // without asking a 3 cm membrane for air it cannot move.
-  if (bassVoicing && f0 < 250.0f) {
+  if (bassVoicing && bassOk_ && f0 < 250.0f) {
     const float vb = fminf(1.0f, (250.0f - f0) * (1.0f / 150.0f));
     const float moved = g[0] * 0.75f * vb;
     g[0] -= moved;

@@ -52,8 +52,12 @@ uint32_t earCaptured();
 void earWindow(float* out, int n);
 // the answer: replay the captured voice into the chain where the synth
 // enters. Start returns false when nothing was captured / no buffer.
+// Recording begins when a voice APPEARS (250 ms pre-roll), not at window
+// open; earAnswerOrigin() = window sample index of the answer's start,
+// for lining the duet track up with the playback.
 bool earAnswerStart();
 bool earAnswerActive();
+uint32_t earAnswerOrigin();
 
 // Codec diagnostics over serial (main forwards single characters):
 //   'r' ES8311 register dump, 'g' mic PGA to max, 'l' codec ADC->DAC

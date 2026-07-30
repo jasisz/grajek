@@ -16,5 +16,7 @@ namespace firefly {
 void note(float cents, float vel);  // a played note flashes
 void ghost(float cents);            // a memory glows, longer and softer
 void tick();                        // decay + battery dusk; every loop pass
+void hello();                       // one soft waking glow at power-on
+void selfTest();                    // serial diag 'f': R/G/B/W, ~2 s, blocking
 
 }  // namespace firefly

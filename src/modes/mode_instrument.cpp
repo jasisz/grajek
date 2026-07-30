@@ -7,7 +7,6 @@
 #include "../firefly.h"
 #include "../pulse.h"
 #include "../settings.h"
-#include "../soul.h"
 #include "../viz.h"
 #include "ga_dsp.h"
 #include "ga_scales.h"
@@ -52,7 +51,14 @@ float s_imuTimer = 0.0f;
 struct PendingOff { uint32_t atMs; int32_t id; };
 PendingOff s_pending[8];
 int s_pendingCount = 0;
+
+// goodnight dwell timer — at file scope so a key press can restart it:
+// without this, a key woke the box for one IMU step and the still-face-down
+// timer relit the lullaby 20 ms later
+uint32_t s_faceDownSince = 0;
 }  // namespace
+
+uint32_t ModeInstrument::lastChimeMs() { return s_lastChimeMs; }
 
 void ModeInstrument::enter(ModeCtx& ctx) {
   settings::applyToEngine(ctx.engine);
@@ -102,6 +108,7 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
   const int gridCol = row == 0 ? col + 1 : col;
   if (down) {
     ambient::notePresence();
+    s_faceDownSince = 0;  // a key means awake — the goodnight dwell restarts
     pulse::onOnset();  // even presses summon the heart, in YOUR tempo
     const int gridRow = 3 - row;
     const float cents = gridToCents(settings::scale(), gridCol, gridRow);
@@ -169,19 +176,25 @@ void ModeInstrument::imuStep(ModeCtx& ctx) {
   const float e = sqrtf(lx * lx + ly * ly + lz * lz);
   s_shakeEnv += (e - s_shakeEnv) * 0.25f;
 
-  // DOBRANOC: położone ekranem w dół i nieruchome przez ~1.5 s — ogród
+  // DOBRANOC: położone ekranem w dół i nieruchome przez ~1.2 s — ogród
   // śpiewa kołysankę (patrz ambient.h). Podniesienie budzi natychmiast.
-  static uint32_t s_faceDownSince = 0;
+  // Detekcja na SUROWYM az: wolny filtr grawitacji potrzebował ~1.5 s,
+  // zanim w ogóle zauważył obrót, i rytuał wyglądał na zepsuty. Duszę
+  // zapisuje ambient dopiero WE ŚNIE — zapis NVS zatrzymuje rdzeń audio
+  // i zgrzytałby w środku muzyki.
   const uint32_t nowMs = millis();
-  if (s_gravZ < -0.75f && s_shakeEnv < 0.20f) {
+  if (az < -0.80f && s_shakeEnv < 0.30f) {
     if (s_faceDownSince == 0) s_faceDownSince = nowMs;
-    else if (nowMs - s_faceDownSince > 1500 && !ambient::lullabyActive()) {
-      soul::save();  // dobranoc utrwala dzień — zanim pudełko zaśnie
+    else if (nowMs - s_faceDownSince > 1200 && !ambient::lullabyActive()) {
+      Serial.println("grajek: dobranoc — kolysanka");
       ambient::lullabyStart();
     }
-  } else {
+  } else if (az > -0.55f) {  // histereza: drgnięcia nie zrywają rytuału
     s_faceDownSince = 0;
-    if (ambient::lullabyActive()) ambient::lullabyAbort();
+    if (ambient::lullabyActive()) {
+      Serial.println("grajek: pobudka");
+      ambient::lullabyAbort();
+    }
   }
   if (ambient::lullabyActive()) return;  // we śnie: bez dzwonków i przechyłów
 

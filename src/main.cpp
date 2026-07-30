@@ -125,6 +125,7 @@ void setup() {
   input::keysInit();
 
   // pudełko budzi się GRAJĄCE — ustawienia mieszkają pod GO
+  firefly::hello();  // jeden ciepły błysk: żyję (i tu mieszka świetlik)
   ModeCtx bootCtx{engine, canvas};
   switchTo(bootCtx, playMode());
 
@@ -147,7 +148,8 @@ void loop() {
       const char c = (char)Serial.read();
       if (c == '\n' || c == '\r') {
         if (len == 1) {
-          hal::audioDiag(line[0]);
+          if (line[0] == 'f') firefly::selfTest();
+          else hal::audioDiag(line[0]);
         } else if (len == 5 && (line[0] == 'W' || line[0] == 'w')) {
           const long rv = strtol(line + 1, nullptr, 16);  // "rrvv" hex
           hal::audioDiagWrite((uint8_t)((rv >> 8) & 0xFF), (uint8_t)(rv & 0xFF));

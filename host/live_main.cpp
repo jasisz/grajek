@@ -1328,6 +1328,9 @@ int main(int argc, char** argv) {
       } else if (c == 'M') {
         // hold-to-listen: auto-repeat keeps refreshing the deadline
         g_earHeldUntil = nowSec() + 0.8;
+        // singing counts as presence: without this, ghosts sowed straight
+        // into the open microphone and the box duetted with itself
+        g_garden.lastInput = nowSec();
         if (!g_earOpen.load(std::memory_order_relaxed)) {
           if (earOpen()) {
             g_duet = Duet{};  // fresh take, fresh tracking
