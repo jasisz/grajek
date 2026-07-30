@@ -1,22 +1,23 @@
-// INSTRUMENT mode: the microtonal grid + the toss gesture.
+// Tryb INSTRUMENT: klawiatura = tylko muzyka.
 //
-// The leftmost keyboard column (col 0) is the control column:
-//   row 0 (`)    — next scale
-//   row 1 (tab)  — next timbre
-//   row 2 (fn)   — IMU tilt role: bend / filter / off
-//   row 3 (ctrl) — TAP: base octave 55/110/220/440 Hz
-//                  HOLD + grid keys: pick the background chord (max 4 notes)
-// The remaining 13x4 keys play: column = scale step, bottom row = lowest
-// interval (geometry in ga_scales.h).
+// Wszystkie 56 klawiszy gra, w każdym wieku — zero specjalnych klawiszy,
+// dziecko nie ma czego się bać. Kolumna = stopień skali, dolny rząd =
+// najniższy interwał (geometria w ga_scales.h). Skala/barwa/oktawa mieszkają
+// w settings (ekran USTAWIEŃ w menu); przytrzymany GO zmienia barwę w locie.
 //
-// The TOSS is always armed, independent of the tilt role: free fall
-// (|a| ~ 0 g) lifts the whole music in a glissando; the catch (an |a| spike)
-// lands it re-rooted on a rung of the JI ladder — flight time picks the
-// rung, the spin direction in flight picks up vs down.
+// Gesty:
+//   MACHANIE  — wiatr wspomnień: każdy zamach wyrywa z ogrodu nutkę, którą
+//               dziecko naprawdę zagrało (czasem oktawę wyżej); siła zamachu
+//               = głośność. Klawisze robią nowe nuty, ruch gra stare — nie
+//               konkurują. Pusty ogród: zapasowa drabinka skali.
+//   PRZECHYŁ  — na boki: jasność brzmienia (filtr); do/od siebie: głębia
+//               przestrzeni (pogłos+echo). Oba wygładzone (~0.4 s), stałe,
+//               bez żadnych przełączników
+//
+// Ekran to wizualizacja "nocna łąka" (viz.h) — bez tekstu podczas grania.
 #pragma once
 #include <stdint.h>
 
-#include "ga_scales.h"
 #include "mode.h"
 
 class ModeInstrument : public Mode {
@@ -25,35 +26,30 @@ class ModeInstrument : public Mode {
   void enter(ModeCtx&) override;
   void exit(ModeCtx&) override;
   void onKey(ModeCtx&, int col, int row, bool down) override;
+  void onGoHold(ModeCtx&) override;  // przytrzymany GO = następna barwa
   void tick(ModeCtx&, float dt) override;
   void draw(ModeCtx&) override;
 
  private:
-  enum class ImuRole : uint8_t { Bend, Filter, Off };
-  enum class TossPhase : uint8_t { Grounded, Flight };
+  void imuStep(ModeCtx&);
+  void triggerChime(ModeCtx&, float energy, float dir);
 
-  void applyTilt(ModeCtx&, float ax, float az);
-  void applyRoot(ModeCtx&);
-  void land(ModeCtx&, float flightSec);
-  static const char* roleName(ImuRole r);
+  // przechyły: wygładzone pozycje -1..1 (boki = jasność, do/od = przestrzeń)
+  float tiltNorm_ = 0.0f;
+  float tiltFbNorm_ = 0.0f;
+  // machanie: grawitacja odfiltrowana wolnym LP, detekcja zamachów z histerezą
+  float gravX_ = 0.0f, gravY_ = 0.0f, gravZ_ = 1.0f;
+  float shakeEnv_ = 0.0f;   // wygładzona energia machania (tłumi przechył)
+  bool swingArmed_ = true;  // histereza: nowy dzwonek dopiero po opadnięciu
+  uint32_t lastChimeMs_ = 0;
+  int chimeStep_ = 0;       // pozycja melodii grzechotki na drabince skali
+  int chimeSlot_ = 0;       // rotacja id nut dzwonków
 
-  ga::ScaleId scale_ = ga::ScaleId::PENTA;  // the happy default
-  int preset_ = 3;  // CHIME — the "pretty by itself" default
-  int octave_ = 2;  // index into {55, 110, 220, 440}
-  ImuRole imuRole_ = ImuRole::Bend;
-  float centerCents_ = 0.0f;  // accumulated toss modulation
+  // zaplanowane noteOff dla dzwonków (krótkie nuty, wybrzmiewają release'em)
+  struct PendingOff { uint32_t atMs; int32_t id; };
+  PendingOff pending_[8];
+  int pendingCount_ = 0;
 
-  TossPhase toss_ = TossPhase::Grounded;
-  int freefall_ = 0;
-  uint32_t tossT0Ms_ = 0;
-  float spinDeg_ = 0.0f;
-  float lastLandCents_ = 0.0f;  // for the LCD
-
-  bool ctrlHeld_ = false;  // (0,3) held = background pick modifier
-  bool ctrlUsed_ = false;
-
-  uint64_t held_ = 0;      // pressed keys (for drawing the grid)
-  float imuShown_ = 0.0f;  // last bend/cutoff value shown on the LCD
+  uint64_t held_ = 0;  // wciśnięte klawisze siatki
   float imuTimer_ = 0.0f;
-  int lastVoices_ = 0;
 };

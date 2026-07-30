@@ -57,6 +57,33 @@ const ScaleInfo& scaleInfo(ScaleId s) {
   return infos[i];
 }
 
+int scaleStepsPerOctave(ScaleId s) {
+  switch (s) {
+    case ScaleId::EDO12: return 12;
+    case ScaleId::EDO19: return 19;
+    case ScaleId::EDO31: return 31;
+    case ScaleId::JI11:  return kGridCols;
+    case ScaleId::PENTA: return 5;
+    case ScaleId::MAJOR: return 7;
+    default:             return 12;
+  }
+}
+
+float scaleStepCents(ScaleId s, int step) {
+  if (step < 0) step = 0;
+  switch (s) {
+    case ScaleId::EDO12: return (float)step * 100.0f;
+    case ScaleId::EDO19: return (float)step * (1200.0f / 19.0f);
+    case ScaleId::EDO31: return (float)step * (1200.0f / 31.0f);
+    case ScaleId::JI11:
+      return ji11Cents()[step % kGridCols] +
+             1200.0f * (float)(step / kGridCols);
+    case ScaleId::PENTA: return stepTable(kPenta, 5, step);
+    case ScaleId::MAJOR: return stepTable(kMajor, 7, step);
+    default:             return (float)step * 100.0f;
+  }
+}
+
 float gridToCents(ScaleId s, int col, int row) {
   col = clampi(col, 0, kGridCols - 1);
   row = clampi(row, 0, kGridRows - 1);

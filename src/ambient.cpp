@@ -22,6 +22,7 @@ int32_t s_bgNextId = 2;   // rotates through ids 1000..1015
 uint32_t s_weatherLastMs = 0;
 int s_fifthVariant = 0;  // 0 = 3/2, 1 = 7/4 (default background only)
 float s_cutoffBase = 7500.0f;
+float s_spaceBase = 0.5f;  // przechył do/od siebie: głębia przestrzeni
 
 // --- ghost garden ---
 struct Mem { float cents; };
@@ -33,7 +34,9 @@ uint32_t s_nextGhostMs = 0;
 uint32_t s_ghostMask = 0;
 int s_ghostSlot = 0;
 constexpr int32_t kGhostIdBase = 1100;
-constexpr uint32_t kGhostIdleMs = 12000;
+// 7 s ciszy wystarczy — przy 12 s pamięć pudełka była praktycznie
+// niesłyszalna w normalnej zabawie (dziecko nie robi tak długich pauz)
+constexpr uint32_t kGhostIdleMs = 7000;
 float s_presetAttack = 0.003f;
 struct PendingOff { uint32_t atMs; int32_t id; };
 PendingOff s_pending[6];
@@ -41,6 +44,11 @@ int s_pendingCount = 0;
 
 int s_uiPreset = 3;           // what the player's keys currently use
 constexpr int kBgPreset = 1;  // the background always speaks DRONE
+
+// okno dla wizualizacji
+float s_breathe = 1.0f;
+float s_lastGhostCents = 0.0f;
+bool s_ghostEvent = false;
 
 uint32_t s_rng = 1;
 float rnd01() {
@@ -79,15 +87,18 @@ void weatherTick(uint32_t nowMs) {
   const float t3 = ga::sinTurns(t / 330.0f);
   const float env = hal::audioEnv();
   const float breathe = ga::clampf(1.0f - (env - 0.04f) / 0.18f, 0.0f, 1.0f);
+  s_breathe = breathe;
 
+  // głębia z przechyłu do/od siebie: mnożnik na echo i pogłos pogody
+  const float space = 0.5f + s_spaceBase;  // 0.5..1.5, neutralnie 1.0
   if (hal::echoAvailable()) {
-    hal::echo().setLevel(
-        ga::clampf(0.45f + 0.25f * breathe + 0.05f * t1, 0.30f, 0.80f));
+    hal::echo().setLevel(ga::clampf(
+        (0.45f + 0.25f * breathe + 0.05f * t1) * space, 0.15f, 0.90f));
     hal::echo().setFeedback(
         ga::clampf(0.52f + 0.10f * breathe + 0.05f * t2, 0.40f, 0.68f));
   }
-  hal::reverb().setWet(
-      ga::clampf(0.30f * (0.85f + 0.35f * breathe) + 0.03f * t3, 0.10f, 0.55f));
+  hal::reverb().setWet(ga::clampf(
+      (0.30f * (0.85f + 0.35f * breathe) + 0.03f * t3) * space, 0.06f, 0.70f));
   const float ratio = (0.95f + 0.15f * t3) * (1.0f - 0.07f * breathe);
   s_engine->setParam(ga::Param::FilterCutoffHz,
                      ga::clampf(s_cutoffBase * ratio, 300.0f, 12000.0f));
@@ -130,11 +141,11 @@ void gardenTick(uint32_t nowMs) {
     return;
   }
   if (s_nextGhostMs == 0) {
-    s_nextGhostMs = nowMs + 2000 + expDelayMs(9000.0f);
+    s_nextGhostMs = nowMs + 1500 + expDelayMs(6000.0f);
     return;
   }
   if ((int32_t)(nowMs - s_nextGhostMs) < 0) return;
-  s_nextGhostMs = nowMs + expDelayMs(12000.0f);
+  s_nextGhostMs = nowMs + expDelayMs(9000.0f);
 
   const float u = rnd01();
   const int back = (int)(u * u * (float)(s_count - 1));
@@ -152,8 +163,10 @@ void gardenTick(uint32_t nowMs) {
   // soft attack just for this note — the engine queue is FIFO, single
   // producer, drained fully before each render: the sandwich is race-free
   s_engine->setParam(ga::Param::EnvAttack, 1.2f);
-  s_engine->noteOn(id, cents, 0.20f + 0.15f * rnd01());
+  s_engine->noteOn(id, cents, 0.26f + 0.16f * rnd01());
   s_engine->setParam(ga::Param::EnvAttack, s_presetAttack);
+  s_lastGhostCents = cents;  // wizualizacja rozbłyśnie odpowiednią iskierkę
+  s_ghostEvent = true;
   if (s_pendingCount < 6)
     s_pending[s_pendingCount++] = {
         nowMs + 2000 + (uint32_t)(2500.0f * rnd01()), id};
@@ -188,6 +201,20 @@ void gardenPush(float cents) {
   if (s_count < kGardenCap) ++s_count;
 }
 
+bool gardenPluck(float* cents) {
+  if (s_count == 0) return false;
+  const float u = rnd01();
+  const int back = (int)(u * u * (float)(s_count - 1));  // świeże częściej
+  const int idx = (s_head - 1 - back + 2 * kGardenCap) % kGardenCap;
+  float c = s_ring[idx].cents;
+  const float r = rnd01();
+  if (r < 0.60f) { /* jak zagrano */ }
+  else if (r < 0.85f) c += 1200.0f;
+  else c += 702.0f;
+  if (cents) *cents = c;
+  return true;
+}
+
 void backgroundToggleNote(float cents) {
   s_bgCustom = true;
   for (int i = 0; i < s_bgCount; ++i) {
@@ -213,10 +240,30 @@ void backgroundSetEnabled(bool on) {
   s_bgOn = on;
   backgroundApplyAll();
 }
+
+void backgroundRefresh() { backgroundApplyAll(); }
 bool backgroundEnabled() { return s_bgOn; }
 int backgroundCount() { return s_bgCount; }
 
 void setCutoffBase(float hz) { s_cutoffBase = ga::clampf(hz, 300.0f, 12000.0f); }
+
+void setSpaceBase(float space01) { s_spaceBase = ga::clampf(space01, 0.0f, 1.0f); }
+
+float breathe01() { return s_breathe; }
+
+int backgroundNoteCount() { return s_bgOn ? s_bgCount : 0; }
+
+float backgroundNoteCents(int i) {
+  if (i < 0 || i >= s_bgCount) return 0.0f;
+  return s_bg[i].cents;
+}
+
+bool pollGhost(float* cents) {
+  if (!s_ghostEvent) return false;
+  s_ghostEvent = false;
+  if (cents) *cents = s_lastGhostCents;
+  return true;
+}
 
 void setPreset(int idx) {
   if (idx < 0) idx = 0;

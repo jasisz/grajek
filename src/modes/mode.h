@@ -21,6 +21,9 @@ class Mode {
   virtual void onKey(ModeCtx&, int col, int row, bool down) {
     (void)col; (void)row; (void)down;
   }
+  // przytrzymany GO (krótki GO = powrót do menu, obsługuje main.cpp);
+  // powtarza się co ~0.7 s, póki przycisk trzymany
+  virtual void onGoHold(ModeCtx&) {}
   virtual void tick(ModeCtx&, float dt) { (void)dt; }
   virtual void draw(ModeCtx&) = 0;
 

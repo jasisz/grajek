@@ -2,212 +2,187 @@
 
 #include <M5Unified.h>
 #include <math.h>
-#include <stdio.h>
 
-#include "../age.h"
 #include "../ambient.h"
-#include "../hal/audio_out.h"
+#include "../settings.h"
+#include "../viz.h"
+#include "ga_dsp.h"
+#include "ga_scales.h"
 
 using namespace ga;
 
 namespace {
-const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED",
-                                               "CHIME", "MUSICBOX"};
-const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
-constexpr float kImuPeriod = 0.02f;  // 50 Hz IMU reads
+constexpr float kImuPeriod = 0.02f;  // odczyt IMU 50 Hz
 constexpr float kNeutralCutoff = 7500.0f;
-// JI ladder for toss landings (flight time -> rung; spin sign -> direction)
-const float kRungCents[5] = {203.9f, 386.3f, 702.0f, 968.8f, 1200.0f};
+
+// machanie: histereza energii ruchu (po odjęciu grawitacji), w g
+constexpr float kSwingOn = 0.55f;   // taki zamach gra
+constexpr float kSwingOff = 0.30f;  // poniżej — uzbrajamy następny
+constexpr uint32_t kSwingCooldownMs = 90;
+
+// przechył boczny (jasność): czulszy na prośbę testera
+constexpr float kTiltDead = 6.0f;
+constexpr float kTiltFull = 32.0f;
+// przechył do/od siebie (przestrzeń): większa martwa strefa, bo w rękach
+// pudełko rzadko leży idealnie płasko
+constexpr float kTiltFbDead = 10.0f;
+constexpr float kTiltFbFull = 45.0f;
+
+// id nut dzwonków — poza siatką (0..55), tłem (1000+) i duchami (1100+)
+constexpr int32_t kChimeIdBase = 900;
 }  // namespace
 
-const char* ModeInstrument::roleName(ImuRole r) {
-  switch (r) {
-    case ImuRole::Bend:   return "BEND";
-    case ImuRole::Filter: return "FILTER";
-    default:              return "off";
-  }
-}
-
-void ModeInstrument::applyRoot(ModeCtx& ctx) {
-  const float root =
-      kBaseOctaves[octave_] * exp2f(centerCents_ / 1200.0f);
-  ctx.engine.setParam(Param::BaseHz, root);
-  hal::strings().setRootHz(root);  // the halo bends onto the new center
-}
-
 void ModeInstrument::enter(ModeCtx& ctx) {
-  if (age::tier() == age::Maluch) {
-    // the toddler tier is a fixed, perfect world: pentatonic chime, no knobs
-    scale_ = ScaleId::PENTA;
-    preset_ = 3;  // CHIME
-  } else if (age::tier() == age::Sredniak &&
-             scale_ != ScaleId::PENTA && scale_ != ScaleId::MAJOR) {
-    scale_ = ScaleId::PENTA;  // only the happy scales at this age
-  }
-  ctx.engine.setParam(Param::TimbrePreset, (float)preset_);
-  ambient::setPreset(preset_);
-  applyRoot(ctx);
+  settings::applyToEngine(ctx.engine);
   ambient::setCutoffBase(kNeutralCutoff);
-  ctx.engine.setParam(Param::BendCents, 0.0f);
   held_ = 0;
-  toss_ = TossPhase::Grounded;
-  freefall_ = 0;
-  ctrlHeld_ = ctrlUsed_ = false;
+  tiltNorm_ = 0.0f;
+  shakeEnv_ = 0.0f;
+  swingArmed_ = true;
+  pendingCount_ = 0;
+  chimeStep_ = ga::scaleStepsPerOctave(settings::scale());  // start w środku
+  viz::setScene(settings::vizScene());
+  viz::reset();
+  // scena mapuje wysokość na X/Y wg realnego zakresu siatki tej skali;
+  // najwyższy stopień w oktawie rozciąga zawinięcie X na pełną szerokość
+  float foldMax = 0.0f;
+  for (int col = 0; col < 14; ++col)
+    for (int row = 0; row < 4; ++row) {
+      const float oct = gridToCents(settings::scale(), col, row) / 1200.0f;
+      const float frac = oct - floorf(oct);
+      if (frac > foldMax) foldMax = frac;
+    }
+  viz::setPitchRange(gridToCents(settings::scale(), 0, 0),
+                     gridToCents(settings::scale(), 13, 3),
+                     foldMax > 0.01f ? foldMax : 1.0f);
+  viz::toast("graj!");  // potwierdzenie wejścia — ŚPIEW nadpisze swoim
   markDirty();
 }
 
 void ModeInstrument::exit(ModeCtx& ctx) {
   ctx.engine.allNotesOff();
-  // Return shared engine params to neutral so the next mode does not inherit
-  // a tilted filter or bend. The tonal center survives — it is yours.
-  ctx.engine.setParam(Param::BendCents, 0.0f);
   ambient::setCutoffBase(kNeutralCutoff);
+  ctx.engine.setParam(Param::BendCents, 0.0f);
 }
 
 void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
-  if (down) ambient::notePresence();
-
-  if (age::tier() == age::Maluch) {
-    // MALUCH: all 56 keys play pentatonic — the control column too; there
-    // is nothing to switch, nothing to get lost in, no wrong key anywhere
-    const int id = row * 14 + col;
-    const uint64_t m = (uint64_t)1 << id;
-    if (down) {
-      const int gridRow = 3 - row;
-      const float cents = gridToCents(ScaleId::PENTA, col, gridRow);
-      ctx.engine.noteOn(id, cents, 0.9f);
-      ambient::gardenPush(cents);
-      held_ |= m;
-    } else {
-      ctx.engine.noteOff(id);
-      held_ &= ~m;
-    }
-    markDirty();
-    return;
-  }
-
-  if (col == 0) {  // control column
-    if (row == 3) {
-      // TAP = octave cycle, HOLD + grid = background pick
-      if (down) {
-        ctrlHeld_ = true;
-        ctrlUsed_ = false;
-      } else {
-        if (ctrlHeld_ && !ctrlUsed_) {
-          octave_ = (octave_ + 1) % 4;
-          applyRoot(ctx);
-        }
-        ctrlHeld_ = false;
-        markDirty();
-      }
-      return;
-    }
-    if (!down) return;
-    switch (row) {
-      case 0:
-        if (age::tier() == age::Sredniak) {
-          // only the happy scales at this age
-          scale_ = scale_ == ScaleId::PENTA ? ScaleId::MAJOR : ScaleId::PENTA;
-        } else {
-          scale_ = (ScaleId)(((int)scale_ + 1) % (int)ScaleId::Count);
-        }
-        ctx.engine.allNotesOff();  // clean retuning
-        ambient::backgroundSetEnabled(ambient::backgroundEnabled());
-        break;
-      case 1:
-        preset_ = (preset_ + 1) % kNumTimbrePresets;
-        ctx.engine.setParam(Param::TimbrePreset, (float)preset_);
-        ambient::setPreset(preset_);
-        break;
-      case 2:
-        imuRole_ = (ImuRole)(((int)imuRole_ + 1) % 3);
-        // back to neutral when the role changes
-        ctx.engine.setParam(Param::BendCents, 0.0f);
-        ambient::setCutoffBase(kNeutralCutoff);
-        imuShown_ = 0.0f;
-        break;
-    }
-    markDirty();
-    return;
-  }
-
-  // playing keys: col 1..13 -> grid column 0..12
-  const int gridRow = 3 - row;  // bottom physical row = lowest interval
-  const float cents = gridToCents(scale_, col - 1, gridRow);
-
-  if (ctrlHeld_) {
-    // HOLD ctrl + grid key = toggle this pitch in the background chord
-    if (down) {
-      ambient::backgroundToggleNote(cents);
-      ctrlUsed_ = true;
-      markDirty();
-    }
-    return;
-  }
-
+  // wszystkie 56 klawiszy gra — kolumna = stopień skali, dolny rząd najniżej
   const int id = row * 14 + col;
   const uint64_t m = (uint64_t)1 << id;
   if (down) {
+    ambient::notePresence();
+    const int gridRow = 3 - row;
+    const float cents = gridToCents(settings::scale(), col, gridRow);
     ctx.engine.noteOn(id, cents, 0.9f);
     ambient::gardenPush(cents);
+    viz::noteOn(id, cents, 0.9f);
     held_ |= m;
   } else {
     ctx.engine.noteOff(id);
+    viz::noteOff(id);
     held_ &= ~m;
   }
-  markDirty();
 }
 
-void ModeInstrument::applyTilt(ModeCtx& ctx, float ax, float az) {
-  // Case tilt; the axis is a first guess — confirm on hardware
-  // (if the wrong tilt direction responds, swap ax for ay below).
-  const float tilt = atan2f(-ax, az) * 57.2957795f;
-  float norm = 0.0f;
-  const float a = fabsf(tilt);
-  if (a > 6.0f)  // dead zone so resting jitter does not detune
-    norm = copysignf(fminf((a - 6.0f) / 34.0f, 1.0f), tilt);
-
-  float shown = imuShown_;
-  switch (imuRole_) {
-    case ImuRole::Bend:
-      shown = norm * 200.0f;  // ±200 cents of glissando
-      ctx.engine.setParam(Param::BendCents, shown);
-      if (fabsf(shown - imuShown_) > 4.0f) markDirty();
-      break;
-    case ImuRole::Filter:
-      shown = 1500.0f * exp2f(norm * 2.2f);  // ~330..6900 Hz
-      // the weather is the single writer of the cutoff — we move its base
-      ambient::setCutoffBase(shown);
-      if (fabsf(shown - imuShown_) > imuShown_ * 0.06f + 10.0f) markDirty();
-      break;
-    case ImuRole::Off:
-      return;
-  }
-  imuShown_ = shown;
+void ModeInstrument::onGoHold(ModeCtx& ctx) {
+  // przytrzymany GO: następna barwa, z dużym napisem zamiast tabelki stanu
+  settings::cyclePreset();
+  settings::applyToEngine(ctx.engine);
+  viz::toast(settings::presetName(settings::preset()));
 }
 
-void ModeInstrument::land(ModeCtx& ctx, float flightSec) {
-  toss_ = TossPhase::Grounded;
-  freefall_ = 0;
-  if (flightSec < 0.12f) {  // a bump, not a throw
-    ctx.engine.setParam(Param::BendCents, 0.0f);
-    return;
+void ModeInstrument::triggerChime(ModeCtx& ctx, float energy, float dir) {
+  // MACHANIE = WIATR WSPOMNIEŃ: klawisze robią nowe nuty, potrząsanie gra
+  // stare — każdy zamach wyrywa z ogrodu nutkę, którą dziecko naprawdę
+  // zagrało. Im więcej grasz, tym bogatsza grzechotka; ruch nagradza
+  // klawisze zamiast z nimi konkurować.
+  float cents;
+  if (!ambient::gardenPluck(&cents)) {
+    // pusty ogród: zapasowa drabinka skali, żeby nigdy nie było niemo
+    const int hi = 2 * ga::scaleStepsPerOctave(settings::scale());
+    chimeStep_ += dir >= 0.0f ? 1 : -1;
+    if (chimeStep_ < 0) chimeStep_ = 1;
+    if (chimeStep_ > hi) chimeStep_ = hi - 1;
+    cents = ga::scaleStepCents(settings::scale(), chimeStep_);
   }
-  int rung;
-  if (flightSec < 0.35f) rung = 1;
-  else if (flightSec < 0.50f) rung = 2;
-  else if (flightSec < 0.65f) rung = 3;
-  else if (flightSec < 0.80f) rung = 4;
-  else rung = 5;
-  // spin direction picks up vs down; the gyro sign convention is a first
-  // guess — if it lands the wrong way on hardware, flip the comparison
-  const float dir =
-      (fabsf(spinDeg_) > 120.0f && spinDeg_ < 0.0f) ? -1.0f : 1.0f;
-  lastLandCents_ = dir * kRungCents[rung - 1];
-  centerCents_ = clampf(centerCents_ + lastLandCents_, -2400.0f, 2400.0f);
-  applyRoot(ctx);
-  ctx.engine.setParam(Param::BendCents, 0.0f);
-  markDirty();
+
+  const float vel = clampf(0.35f + (energy - kSwingOn) * 0.45f, 0.35f, 0.85f);
+  const int32_t id = kChimeIdBase + (chimeSlot_++ & 7);
+  // miękki atak tylko dla tej nuty (kanapka FIFO jak u duchów) — wiatr
+  // unosi wspomnienia, nie uderza w nie
+  ctx.engine.setParam(Param::EnvAttack, 0.25f);
+  ctx.engine.noteOn(id, cents, vel);
+  ctx.engine.setParam(Param::EnvAttack,
+                      ga::timbrePreset(settings::preset()).attack);
+  if (pendingCount_ < 8)
+    pending_[pendingCount_++] = {millis() + 150, id};
+
+  ambient::notePresence();
+  viz::chime(cents, vel);
+}
+
+void ModeInstrument::imuStep(ModeCtx& ctx) {
+  float ax = 0, ay = 0, az = 0;
+  M5.Imu.update();
+  M5.Imu.getAccel(&ax, &ay, &az);
+
+  // wolny LP wyłuskuje grawitację; reszta to ruch ręki
+  const float a = 0.05f;
+  gravX_ += (ax - gravX_) * a;
+  gravY_ += (ay - gravY_) * a;
+  gravZ_ += (az - gravZ_) * a;
+  const float lx = ax - gravX_, ly = ay - gravY_, lz = az - gravZ_;
+  const float e = sqrtf(lx * lx + ly * ly + lz * lz);
+  shakeEnv_ += (e - shakeEnv_) * 0.25f;
+
+  // MACHANIE: zamach powyżej progu gra dzwonek; następny dopiero, gdy ruch
+  // opadnie (histereza) — jedno machnięcie = jeden dzwonek, nie seria
+  const uint32_t now = millis();
+  if (swingArmed_ && e > kSwingOn && now - lastChimeMs_ > kSwingCooldownMs) {
+    swingArmed_ = false;
+    lastChimeMs_ = now;
+    // kierunek zamachu wzdłuż dominującej osi — machanie w lewo/prawo
+    // prowadzi melodię w dół/górę
+    const float dir = fabsf(lx) >= fabsf(ly) ? lx : ly;
+    triggerChime(ctx, e, dir);
+  } else if (e < kSwingOff) {
+    swingArmed_ = true;
+  }
+
+  // PRZECHYŁY: liczone z wygładzonej grawitacji, więc machanie nimi nie
+  // szarpie; dojeżdżają do celu przez ~0.4 s zamiast skakać
+  if (shakeEnv_ < 0.25f) {
+    // na boki = jasność brzmienia
+    const float tilt = atan2f(-gravX_, gravZ_) * 57.2957795f;
+    float target = 0.0f;
+    const float mag = fabsf(tilt);
+    if (mag > kTiltDead)
+      target = copysignf(
+          fminf((mag - kTiltDead) / (kTiltFull - kTiltDead), 1.0f), tilt);
+    tiltNorm_ += (target - tiltNorm_) * 0.055f;  // tau ~0.4 s przy 50 Hz
+
+    // w stronę ciemna mocno, w stronę jasna delikatnie — neutralnie jest
+    // już jasno, więc ekspresja mieszka w przyciemnianiu
+    const float cutoff = tiltNorm_ >= 0.0f
+                             ? kNeutralCutoff * exp2f(0.65f * tiltNorm_)
+                             : kNeutralCutoff * exp2f(2.4f * tiltNorm_);
+    ambient::setCutoffBase(cutoff);
+    viz::setTilt(tiltNorm_);
+
+    // do/od siebie = głębia przestrzeni: od siebie dźwięk odpływa w pogłos
+    // i echo, do siebie robi się suchy i bliski (jak przybliżanie ucha);
+    // znak osi to pierwsze przybliżenie — na sprzęcie ew. odwróć gravY_
+    const float tiltFb = atan2f(-gravY_, gravZ_) * 57.2957795f;
+    float targetFb = 0.0f;
+    const float magFb = fabsf(tiltFb);
+    if (magFb > kTiltFbDead)
+      targetFb = copysignf(
+          fminf((magFb - kTiltFbDead) / (kTiltFbFull - kTiltFbDead), 1.0f),
+          tiltFb);
+    tiltFbNorm_ += (targetFb - tiltFbNorm_) * 0.055f;
+    ambient::setSpaceBase(0.5f + 0.5f * tiltFbNorm_);
+    viz::setDepth(tiltFbNorm_);  // scena też pokazuje głębię
+  }
 }
 
 void ModeInstrument::tick(ModeCtx& ctx, float dt) {
@@ -215,105 +190,26 @@ void ModeInstrument::tick(ModeCtx& ctx, float dt) {
   if (imuTimer_ >= kImuPeriod) {
     imuTimer_ -= kImuPeriod;
     if (imuTimer_ > kImuPeriod) imuTimer_ = 0.0f;
+    imuStep(ctx);
+  }
 
-    float ax = 0, ay = 0, az = 0;
-    M5.Imu.update();
-    M5.Imu.getAccel(&ax, &ay, &az);
-    const float mag = sqrtf(ax * ax + ay * ay + az * az);
-
-    if (toss_ == TossPhase::Grounded) {
-      if (mag < 0.35f) {  // free fall: the accelerometer reads ~0 g
-        if (++freefall_ >= 2) {
-          toss_ = TossPhase::Flight;
-          tossT0Ms_ = millis();
-          spinDeg_ = 0.0f;
-        }
-      } else {
-        freefall_ = 0;
-        applyTilt(ctx, ax, az);
-      }
-    } else {  // Flight
-      float gx = 0, gy = 0, gz = 0;
-      M5.Imu.getGyro(&gx, &gy, &gz);
-      spinDeg_ += gz * kImuPeriod;  // deg/s * s
-      const float t = (float)(millis() - tossT0Ms_) * 0.001f;
-      float alt = 620.0f * t;
-      if (alt > 1250.0f) alt = 1250.0f;
-      ctx.engine.setParam(Param::BendCents, alt);
-      if (mag > 1.6f) {
-        land(ctx, t);
-      } else if (t > 3.0f) {  // lost the catch: give up gracefully
-        toss_ = TossPhase::Grounded;
-        ctx.engine.setParam(Param::BendCents, 0.0f);
-      }
+  // zaplanowane wyciszenia dzwonków (nuta krótka, wybrzmiewa release'em)
+  const uint32_t now = millis();
+  for (int i = 0; i < pendingCount_;) {
+    if ((int32_t)(now - pending_[i].atMs) >= 0) {
+      ctx.engine.noteOff(pending_[i].id);
+      pending_[i] = pending_[--pendingCount_];
+    } else {
+      ++i;
     }
   }
-  const int v = ctx.engine.activeVoiceCount();
-  if (v != lastVoices_) {
-    lastVoices_ = v;
-    markDirty();
-  }
+
+  // duch zagrał wspomnienie? niech rozbłyśnie jego iskierka na łące
+  float ghostCents = 0.0f;
+  if (ambient::pollGhost(&ghostCents)) viz::ghost(ghostCents);
+
+  // łąka żyje cały czas — pełna klatka co przebieg (main ogranicza do ~25 fps)
+  markDirty();
 }
 
-void ModeInstrument::draw(ModeCtx& ctx) {
-  // The PHYSICAL keys are the interface — no virtual keyboard mirror.
-  // The screen shows state big and leaves room to breathe.
-  auto& g = ctx.canvas;
-  g.fillSprite(TFT_BLACK);
-  char buf[64];
-
-  g.setTextSize(1);
-  g.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  snprintf(buf, sizeof buf, "%s  |  %s  |  %d Hz  |  %s",
-           scaleInfo(scale_).name, kPresetNames[preset_],
-           (int)kBaseOctaves[octave_], age::label(age::tier()));
-  g.drawString(buf, 4, 3);
-  g.drawFastHLine(0, 14, 240, TFT_DARKGREY);
-
-  // big center area: one thing at a time, readable from across a room
-  g.setTextColor(TFT_ORANGE, TFT_BLACK);
-  if (toss_ == TossPhase::Flight) {
-    g.setTextSize(3);
-    g.drawString("LOT!", 80, 45);
-  } else if (ctrlHeld_) {
-    g.setTextSize(2);
-    g.drawString("TLO: graj nuty", 30, 40);
-    g.setTextSize(1);
-    snprintf(buf, sizeof buf, "wybrane: %d/4", ambient::backgroundCount());
-    g.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    g.drawString(buf, 30, 65);
-  } else {
-    g.setTextSize(2);
-    if ((int)centerCents_ != 0)
-      snprintf(buf, sizeof buf, "centrum %+d c", (int)centerCents_);
-    else if (lastLandCents_ != 0.0f)
-      snprintf(buf, sizeof buf, "w domu (1/1)");
-    else
-      snprintf(buf, sizeof buf, "graj / rzuc / sluchaj");
-    g.drawString(buf, 14, 40);
-    // a quiet life sign: one dot per sounding voice
-    g.setTextSize(1);
-    const int v = lastVoices_ > 10 ? 10 : lastVoices_;
-    for (int i = 0; i < v; ++i)
-      g.fillCircle(20 + i * 20, 78, 4, TFT_ORANGE);
-    for (int i = v; i < 10; ++i)
-      g.drawCircle(20 + i * 20, 78, 4, TFT_DARKGREY);
-  }
-
-  g.drawFastHLine(0, 92, 240, TFT_DARKGREY);
-  g.setTextSize(1);
-  g.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  g.drawString("` skala  tab barwa  fn IMU  ctrl okt/TLO", 4, 97);
-
-  if (imuRole_ == ImuRole::Bend)
-    snprintf(buf, sizeof buf, "IMU %s %+d c  tlo %d  GO=menu",
-             roleName(imuRole_), (int)imuShown_, ambient::backgroundCount());
-  else if (imuRole_ == ImuRole::Filter)
-    snprintf(buf, sizeof buf, "IMU %s %d Hz  tlo %d  GO=menu",
-             roleName(imuRole_), (int)imuShown_, ambient::backgroundCount());
-  else
-    snprintf(buf, sizeof buf, "IMU %s  tlo %d  GO=menu", roleName(imuRole_),
-             ambient::backgroundCount());
-  g.setTextColor(TFT_WHITE, TFT_BLACK);
-  g.drawString(buf, 4, 122);
-}
+void ModeInstrument::draw(ModeCtx& ctx) { viz::draw(ctx.canvas); }

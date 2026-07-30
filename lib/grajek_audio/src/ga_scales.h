@@ -12,10 +12,6 @@
 //    thirds and a whole column is a pretty chord — the "happy" scales where
 //    no pair of keys can clash
 //
-// Known trade-off: on the device the INSTRUMENT mode reserves column 0 for
-// controls, so only 13 of the 14 JI ratios are reachable (the 14th, 11/6,
-// falls into a ~231 c gap before the next row's octave). Acceptable for now;
-// revisit if the gap bothers playing.
 #pragma once
 #include <stdint.h>
 
@@ -35,5 +31,10 @@ const ScaleInfo& scaleInfo(ScaleId s);
 
 // col: 0..13, row: 0..3 (0 = bottom row). Result in cents relative to BaseHz.
 float gridToCents(ScaleId s, int col, int row);
+
+// Absolute scale step -> cents (step may span octaves). The melodic ladder
+// for gesture-triggered chimes: step N is always the Nth note of the scale.
+float scaleStepCents(ScaleId s, int step);
+int scaleStepsPerOctave(ScaleId s);
 
 }  // namespace ga

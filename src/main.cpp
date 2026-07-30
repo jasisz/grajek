@@ -6,14 +6,15 @@
 // The two sides talk exclusively through the engine's lock-free event queue.
 #include <M5Cardputer.h>
 
-#include "age.h"
 #include "ambient.h"
 #include "ga_engine.h"
 #include "hal/audio_out.h"
 #include "input/keys.h"
 #include "modes/mode.h"
 #include "modes/mode_instrument.h"
-#include "modes/mode_stub.h"
+#include "modes/mode_settings.h"
+#include "modes/mode_sing.h"
+#include "settings.h"
 
 namespace {
 
@@ -25,58 +26,41 @@ ga::Engine engine;
 // hardware contact). The push destination is passed explicitly instead.
 M5Canvas canvas;
 
+// Bez menu: pudełko albo GRA, albo pokazuje USTAWIENIA. Krótkie GO
+// przełącza między tymi dwoma światami, przytrzymane (podczas grania)
+// zmienia barwę. Granie to INSTRUMENT, a z otwartym uchem — ŚPIEW
+// (przełącznik „6 ucho" w ustawieniach).
 ModeInstrument modeInstrument;
-ModeStub modeLoop("LOOP", "layered looper fed by the microphone");
-ModeStub modeDrone("DRONE", "plays itself when lying flat");
-ModeStub modeIr("IR CONDUCTOR", "IR command sequencer for AV gear");
-Mode* modes[4] = {&modeInstrument, &modeLoop, &modeDrone, &modeIr};
+ModeSing modeSing;
+ModeSettings modeSettings;
 
-int currentMode = -1;  // -1 = menu
-bool menuDirty = true;
+Mode* current = nullptr;
+bool inSettings = false;
 bool audioOk = false;
 bool displayOk = false;  // M5GFX autodetect can fail — never draw blind:
                          // pushSprite on a panel-less display hard-crashes
 uint32_t lastFrameMs = 0;
 uint32_t lastTickMs = 0;
 
-void drawMenu() {
-  if (!displayOk) return;
-  canvas.fillSprite(TFT_BLACK);
-  canvas.setTextSize(2);
-  canvas.setTextColor(TFT_ORANGE, TFT_BLACK);
-  canvas.drawString("grajek", 8, 6);
-  canvas.setTextSize(1);
-  canvas.setTextColor(TFT_WHITE, TFT_BLACK);
-  for (int i = 0; i < 4; ++i) {
-    char line[48];
-    snprintf(line, sizeof line, "%d  %s%s", i + 1, modes[i]->name(),
-             i == 0 ? "" : "  (soon)");
-    canvas.drawString(line, 16, 36 + i * 16);
+// GO: krótkie puszczenie = powrót do menu, przytrzymanie = akcja trybu
+// (w INSTRUMENT: następna barwa), powtarzana co 700 ms póki trzymany
+bool goLongUsed = false;
+uint32_t goNextActionMs = 600;
+
+void switchTo(ModeCtx& ctx, Mode* next) {
+  if (current) {
+    current->exit(ctx);
+    engine.allNotesOff();
+    ambient::backgroundRefresh();  // czystka nie może zabijać tampury
   }
-  canvas.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  char ageLine[48];
-  snprintf(ageLine, sizeof ageLine, "press 1-4 to pick a mode | latka: %s",
-           age::label(age::tier()));
-  canvas.drawString(ageLine, 8, 108);
-  if (!audioOk) {
-    canvas.setTextColor(TFT_RED, TFT_BLACK);
-    canvas.drawString("AUDIO INIT FAILED - check serial log", 8, 122);
-  } else {
-    canvas.drawString("GO returns here from any mode", 8, 122);
-  }
-  canvas.pushSprite(&M5Cardputer.Display, 0, 0);
+  current = next;
+  Serial.printf("grajek: -> %s\n", next->name());
+  next->enter(ctx);
 }
 
-void enterMode(ModeCtx& ctx, int idx) {
-  currentMode = idx;
-  modes[idx]->enter(ctx);
-}
-
-void leaveMode(ModeCtx& ctx) {
-  modes[currentMode]->exit(ctx);
-  engine.allNotesOff();
-  currentMode = -1;
-  menuDirty = true;
+// granie: INSTRUMENT albo ŚPIEW, wedle przełącznika w ustawieniach
+Mode* playMode() {
+  return settings::singOn() ? (Mode*)&modeSing : (Mode*)&modeInstrument;
 }
 
 }  // namespace
@@ -101,7 +85,6 @@ void setup() {
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.setBrightness(160);
   }
-  age::load();
 
   if (displayOk) {
     canvas.setPsram(false);  // StampS3A has no PSRAM — internal RAM
@@ -112,9 +95,11 @@ void setup() {
     }
   }
 
+  // EKSPERYMENT UCHA: fabryczny mikrofon działa przy 16 kHz (BCLK 512 kHz),
+  // nasz duplex przy 48 kHz milczy — testujemy zależność od zegara.
+  // Docelowo wraca 48000 (albo najwyższa częstotliwość, przy której ADC żyje).
   engine.init(48000.0f);
   engine.setParam(ga::Param::FilterCutoffHz, 7500.0f);
-  engine.setParam(ga::Param::TimbrePreset, 3.0f);  // CHIME by default
 
   audioOk = hal::audioInit(&engine);
   if (!audioOk) Serial.println("grajek: audio init FAILED");
@@ -122,9 +107,18 @@ void setup() {
   // the ambient brain: background chord, weather, ghost garden — alive from
   // boot, in the menu too (the box hums the moment it wakes up)
   ambient::init(&engine);
-  ambient::setPreset(3);
+
+  // zapamiętane wybory (skala, barwa, oktawa, tło) wracają po włączeniu
+  settings::load();
+  settings::applyToEngine(engine);
+  if (!settings::backgroundOn()) ambient::backgroundSetEnabled(false);
 
   input::keysInit();
+
+  // pudełko budzi się GRAJĄCE — ustawienia mieszkają pod GO
+  ModeCtx bootCtx{engine, canvas};
+  switchTo(bootCtx, playMode());
+
   lastTickMs = millis();
 }
 
@@ -134,52 +128,70 @@ void loop() {
   const float dt = (float)(now - lastTickMs) / 1000.0f;
   lastTickMs = now;
 
-  M5Cardputer.update();
+  // diagnostyka po serialu: pojedyncze znaki sterują kodekiem (patrz
+  // hal::audioDiag), a linia "Wrrvv" (hex) pisze dowolny rejestr ES8311 —
+  // pozwala bisektować konfigurację bez flashowania
+  {
+    static char line[8];
+    static int len = 0;
+    while (Serial.available() > 0) {
+      const char c = (char)Serial.read();
+      if (c == '\n' || c == '\r') {
+        if (len == 1) {
+          hal::audioDiag(line[0]);
+        } else if (len == 5 && (line[0] == 'W' || line[0] == 'w')) {
+          const long rv = strtol(line + 1, nullptr, 16);  // "rrvv" hex
+          hal::audioDiagWrite((uint8_t)((rv >> 8) & 0xFF), (uint8_t)(rv & 0xFF));
+        }
+        len = 0;
+      } else if (len < 7) {
+        line[len++] = c;
+        line[len] = 0;
+      }
+    }
+  }
+  // telemetria ucha przy diagnostyce 'e' (poza trybem ŚPIEW, który loguje sam)
+  static uint32_t lastDiagMs = 0;
+  if (!settings::singOn() && hal::earIsOpen() && now - lastDiagMs > 1000) {
+    lastDiagMs = now;
+    Serial.printf("grajek: poziom=%.4f\n", hal::earLevel());
+  }
 
+  // UWAGA: bez M5Cardputer.update() — klawiaturę czytamy sami w keysPoll
+  // (polling FIFO TCA8418; czytnik biblioteki na przerwaniu potrafił się
+  // zakleszczyć i zamrażał klawiaturę), a update() podkradałby zdarzenia
   input::KeyEvent ev[input::kMaxKeyEvents];
   const int n = input::keysPoll(ev, input::kMaxKeyEvents);
   ModeCtx ctx{engine, canvas};
 
-  if (input::goPressed() && currentMode >= 0) leaveMode(ctx);
-
-  if (currentMode < 0) {
-    for (int i = 0; i < n; ++i) {
-      // digits 1..4 live in the top row only
-      if (ev[i].down && ev[i].row == 0 && ev[i].col >= 1 && ev[i].col <= 4) {
-        enterMode(ctx, ev[i].col - 1);
-        break;
-      }
+  // GO: przytrzymanie PODCZAS GRANIA = następna barwa (powtarzane),
+  // krótkie puszczenie = przeskok granie <-> ustawienia
+  bool justSwitched = false;
+  if (!inSettings && input::goHeldMs() >= goNextActionMs) {
+    current->onGoHold(ctx);
+    goNextActionMs += 700;
+    goLongUsed = true;
+  }
+  if (input::goReleased()) {
+    if (!goLongUsed) {
+      inSettings = !inSettings;
+      switchTo(ctx, inSettings ? (Mode*)&modeSettings : playMode());
+      justSwitched = true;  // klawisz-cyfra z tego przebiegu nie zagra nuty
     }
-    // parent gesture: long-press BtnGO in the menu cycles the age tier —
-    // deliberate, invisible to a toddler, saved to NVS immediately
-    static bool ageCycled = false;
-    if (input::goHeldMs() > 1200) {
-      if (!ageCycled) {
-        age::cycle();
-        ageCycled = true;
-        menuDirty = true;
-      }
-    } else if (input::goHeldMs() == 0) {
-      ageCycled = false;
-    }
+    goLongUsed = false;
+    goNextActionMs = 600;
   }
 
-  if (currentMode < 0) {
-    if (menuDirty) {
-      drawMenu();
-      menuDirty = false;
-    }
-  } else {
-    Mode* m = modes[currentMode];
-    for (int i = 0; i < n; ++i) m->onKey(ctx, ev[i].col, ev[i].row, ev[i].down);
-    m->tick(ctx, dt);
+  if (!justSwitched)
+    for (int i = 0; i < n; ++i)
+      current->onKey(ctx, ev[i].col, ev[i].row, ev[i].down);
+  current->tick(ctx, dt);
 
-    if (displayOk && m->dirty() && now - lastFrameMs >= 40) {  // ~25 fps max
-      m->draw(ctx);
-      canvas.pushSprite(&M5Cardputer.Display, 0, 0);
-      m->clearDirty();
-      lastFrameMs = now;
-    }
+  if (displayOk && current->dirty() && now - lastFrameMs >= 40) {  // ~25 fps
+    current->draw(ctx);
+    canvas.pushSprite(&M5Cardputer.Display, 0, 0);
+    current->clearDirty();
+    lastFrameMs = now;
   }
 
   ambient::tick();

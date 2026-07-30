@@ -24,11 +24,12 @@ int keysPoll(KeyEvent* out, int maxEvents);
 
 bool keyHeld(int col, int row);
 
-// BtnGO (G0) with debounce; true exactly once per press.
-bool goPressed();
+// BtnGO (G0), odszumiony. Stan próbkuje keysPoll() — krawędzie są ważne
+// przez jeden przebieg pętli (main woła keysPoll raz na przebieg).
+bool goPressed();   // true dokładnie raz, na wciśnięciu
+bool goReleased();  // true dokładnie raz, na puszczeniu
 
-// How long BtnGO has been held, in ms (0 when up) — the parent gesture
-// (long-press in the menu) cycles the age tier.
+// ile ms GO jest trzymany (0 gdy puszczony) — przytrzymanie = akcja trybu
 uint32_t goHeldMs();
 
 }  // namespace input
