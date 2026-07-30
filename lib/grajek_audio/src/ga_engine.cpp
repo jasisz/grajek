@@ -125,6 +125,7 @@ void Engine::handle(const Event& e) {
           timbre_ = timbrePreset(idx);
           break;
         }
+        case Param::BassVoicing:    bassVoicing_ = e.a > 0.5f; break;
       }
       break;
     case Event::None:
@@ -149,7 +150,7 @@ void Engine::renderBlock(float* out, int n) {
   int act = 0;
   for (int i = 0; i < kMaxVoices; ++i) {
     if (voices_[i].active()) {
-      voices_[i].render(mix, n, baseHz_, bendRatio);
+      voices_[i].render(mix, n, baseHz_, bendRatio, bassVoicing_);
       ++act;
     }
   }

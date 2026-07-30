@@ -1211,6 +1211,7 @@ int main(int argc, char** argv) {
          (double)kEchoSec);
   printf("  grid: keyboard rows = instrument rows (bottom = lowest)\n");
   printf("  TAB scale | ` timbre | BACKSPACE octave | SHIFT+L latch (drony!)\n");
+  printf("  SHIFT+B bas psychoakustyczny on/off (A/B na 55/110 Hz)\n");
   printf("  arrows <- -> bend | up/down filter | ENTER panic+re-center | ESC quit\n");
   printf("  FREEZE: SHIFT+F — to co teraz slychac staje sie PODLOGA (petla\n"
          "          wstecz z pamieci echa; lata z rzutami, SHIFT+U cofa)\n");
@@ -1316,6 +1317,12 @@ int main(int argc, char** argv) {
         applyCenter(ui);
       } else if (c == 'L') {
         ui.latch = !ui.latch;
+      } else if (c == 'B') {
+        // A/B the psychoacoustic bass (virtual pitch below ~250 Hz) by ear
+        static bool bassOn = true;
+        bassOn = !bassOn;
+        g_engine.setParam(Param::BassVoicing, bassOn ? 1.0f : 0.0f);
+        printf("\n  >> bas psychoakustyczny: %s\n", bassOn ? "ON" : "off");
       } else if (c == 'H') {
         g_harmony = !g_harmony;
       } else if (c == 'M') {

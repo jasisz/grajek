@@ -45,7 +45,12 @@ class Voice {
   float currentCents() const { return cents_; }
 
   // Renders and ADDS into the mono buffer. bendRatio = global offset (IMU).
-  void render(float* out, int n, float baseHz, float bendRatio);
+  // bassVoicing: psychoacoustic bass for tiny speakers — below ~250 Hz the
+  // fundamental's energy moves into partials 2-3 and the ear rebuilds the
+  // missing fundamental (virtual pitch); a 3 cm driver never gets asked
+  // for air it cannot move.
+  void render(float* out, int n, float baseHz, float bendRatio,
+              bool bassVoicing);
 
  private:
   uint32_t rng();

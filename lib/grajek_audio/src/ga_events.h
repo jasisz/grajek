@@ -17,6 +17,7 @@ enum class Param : uint8_t {
   EnvSustain,      // 0..1
   EnvRelease,
   TimbrePreset,    // timbre preset index (int carried in float)
+  BassVoicing,     // >0.5 = psychoacoustic bass for tiny speakers (default on)
 };
 
 struct Event {

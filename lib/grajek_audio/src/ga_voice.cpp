@@ -101,7 +101,8 @@ void Voice::noteOn(int32_t id, float cents, float vel, const Timbre& t,
   env_.noteOn();
 }
 
-void Voice::render(float* out, int n, float baseHz, float bendRatio) {
+void Voice::render(float* out, int n, float baseHz, float bendRatio,
+                   bool bassVoicing) {
   if (!env_.active() || n <= 0) return;
 
   if (glideSec_ > 0.0001f) {
@@ -130,6 +131,18 @@ void Voice::render(float* out, int n, float baseHz, float bendRatio) {
       g[k] = gain_[k] * pamp_[k] * breathe;
       inc[k] = (uint32_t)(ph * 4294967296.0);
     }
+  }
+  // Psychoacoustic bass: the additive engine KNOWS f0, so no mix-side
+  // processor is needed — below ~250 Hz shift the fundamental's energy
+  // into partials 2-3 (harmonics of f0 in every preset) and the ear
+  // reconstructs the missing fundamental. The note sounds AT its pitch
+  // without asking a 3 cm membrane for air it cannot move.
+  if (bassVoicing && f0 < 250.0f) {
+    const float vb = fminf(1.0f, (250.0f - f0) * (1.0f / 150.0f));
+    const float moved = g[0] * 0.75f * vb;
+    g[0] -= moved;
+    if (inc[1]) g[1] += moved * 0.6f;
+    if (inc[2]) g[2] += moved * 0.4f;
   }
   // block-rate evolution: melt, LFO phases, wandering detune
   for (int k = 0; k < Timbre::kPartials; ++k) {

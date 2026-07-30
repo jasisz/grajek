@@ -54,6 +54,7 @@ class Engine {
   float glideSec_ = 0.0f;
   float bend_ = 0.0f, bendTarget_ = 0.0f;
   float cutoff_ = 7000.0f, cutoffTarget_ = 7000.0f, res_ = 0.15f;
+  bool bassVoicing_ = true;  // virtual-pitch bass (Param::BassVoicing)
   float polyComp_ = 1.0f;  // equal-power polyphony compensation, smoothed
   uint32_t ageCounter_ = 0;
   std::atomic<int> activeCount_{0};

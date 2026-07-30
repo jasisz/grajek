@@ -76,6 +76,51 @@ int16_t* s_tape = nullptr;
 constexpr int kEchoRate = 16000;
 constexpr float kEchoSeconds = 3.0f;
 
+// Speaker voicing for the 3 cm driver, applied to the final mix:
+//  - 2nd-order high-pass at 180 Hz: energy the membrane cannot reproduce
+//    only distorts trying — remove it and the mids come out cleaner (the
+//    engine's virtual-pitch bass already keeps low notes AUDIBLE);
+//  - gentle presence shelf (+2.5 dB above ~2.5 kHz) for clarity.
+// The 3.5 mm jack gets the same voicing (hardware mute only) — acceptable:
+// it is mild, and the box is tuned for its own speaker first.
+struct Biquad {
+  float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+  inline float process(float x) {
+    const float y = b0 * x + z1;
+    z1 = b1 * x - a1 * y + z2;
+    z2 = b2 * x - a2 * y;
+    return y;
+  }
+};
+Biquad s_spkHp, s_spkShelf;
+
+void speakerVoicingInit(float sr) {
+  {  // RBJ high-pass, f=180 Hz, Q=0.707
+    const float w = 6.2831853f * 180.0f / sr;
+    const float cw = cosf(w), alpha = sinf(w) / (2.0f * 0.707f);
+    const float a0 = 1.0f + alpha;
+    s_spkHp.b0 = (1.0f + cw) * 0.5f / a0;
+    s_spkHp.b1 = -(1.0f + cw) / a0;
+    s_spkHp.b2 = (1.0f + cw) * 0.5f / a0;
+    s_spkHp.a1 = -2.0f * cw / a0;
+    s_spkHp.a2 = (1.0f - alpha) / a0;
+  }
+  {  // RBJ high shelf, f=2500 Hz, +2.5 dB, S=0.7
+    const float A = powf(10.0f, 2.5f / 40.0f);
+    const float w = 6.2831853f * 2500.0f / sr;
+    const float cw = cosf(w);
+    const float alpha =
+        sinf(w) * 0.5f * sqrtf((A + 1.0f / A) * (1.0f / 0.7f - 1.0f) + 2.0f);
+    const float sqA2al = 2.0f * sqrtf(A) * alpha;
+    const float a0 = (A + 1.0f) - (A - 1.0f) * cw + sqA2al;
+    s_spkShelf.b0 = A * ((A + 1.0f) + (A - 1.0f) * cw + sqA2al) / a0;
+    s_spkShelf.b1 = -2.0f * A * ((A - 1.0f) + (A + 1.0f) * cw) / a0;
+    s_spkShelf.b2 = A * ((A + 1.0f) + (A - 1.0f) * cw - sqA2al) / a0;
+    s_spkShelf.a1 = 2.0f * ((A - 1.0f) - (A + 1.0f) * cw) / a0;
+    s_spkShelf.a2 = ((A + 1.0f) - (A - 1.0f) * cw - sqA2al) / a0;
+  }
+}
+
 // Child-ear ceiling: a hard cap on the final output (~-5 dBFS after a soft
 // clip). This instrument is for a kid — no combination of layers may ever
 // get loud enough to hurt, on the speaker or on headphones. Kept digital
@@ -207,9 +252,11 @@ void audioTask(void*) {
     if (s_tape) s_echoBridge.process(fbuf, hal::kAudioFrames);
     s_reverb.process(fbuf, hal::kAudioFrames);
 
-    // final glue clip + the child-ear ceiling — nothing gets past this
-    for (int i = 0; i < hal::kAudioFrames; ++i)
-      fbuf[i] = ga::softClip(fbuf[i]) * kEarCeiling;
+    // speaker voicing, then the glue clip + child-ear ceiling
+    for (int i = 0; i < hal::kAudioFrames; ++i) {
+      const float v = s_spkShelf.process(s_spkHp.process(fbuf[i]));
+      fbuf[i] = ga::softClip(v) * kEarCeiling;
+    }
 
     ga::Engine::toInt16(fbuf, mono, hal::kAudioFrames);
     // The ES8311 DAC is mono but the I2S frame is stereo — duplicate the channel
@@ -480,6 +527,7 @@ bool audioInit(ga::Engine* engine) {
 
   // --- effect chain ---
   const float sr = engine->sampleRate();
+  speakerVoicingInit(sr);
   s_strings.init(sr);
   s_strings.setRootHz(220.0f);
   s_reverb.init(sr);
