@@ -18,7 +18,12 @@
 namespace {
 
 ga::Engine engine;
-M5Canvas canvas(&M5Cardputer.Display);
+// NO parent at global-construction time: M5Cardputer.Display is a REFERENCE
+// member initialized by the library's constructor, and cross-TU global
+// construction order is unspecified — binding it here captured a null parent
+// and the first pushSprite crashed the core (the boot-loop on first
+// hardware contact). The push destination is passed explicitly instead.
+M5Canvas canvas;
 
 ModeInstrument modeInstrument;
 ModeStub modeLoop("LOOP", "layered looper fed by the microphone");
@@ -59,7 +64,7 @@ void drawMenu() {
   } else {
     canvas.drawString("GO returns here from any mode", 8, 122);
   }
-  canvas.pushSprite(0, 0);
+  canvas.pushSprite(&M5Cardputer.Display, 0, 0);
 }
 
 void enterMode(ModeCtx& ctx, int idx) {
@@ -77,6 +82,7 @@ void leaveMode(ModeCtx& ctx) {
 }  // namespace
 
 void setup() {
+  Serial.begin(115200);  // our diagnostics were silently dropped without it
   auto cfg = M5.config();
   cfg.internal_spk = false;  // we drive the codec ourselves (low latency)
   cfg.internal_mic = false;  // mic comes later with the LOOP mode
@@ -170,7 +176,7 @@ void loop() {
 
     if (displayOk && m->dirty() && now - lastFrameMs >= 40) {  // ~25 fps max
       m->draw(ctx);
-      canvas.pushSprite(0, 0);
+      canvas.pushSprite(&M5Cardputer.Display, 0, 0);
       m->clearDirty();
       lastFrameMs = now;
     }
