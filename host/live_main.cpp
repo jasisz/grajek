@@ -34,8 +34,8 @@
 //           SPACE 2nd press = catch: flight time picks the rung of the JI
 //                 ladder (9/8, 5/4, 3/2, 7/4, 2/1) and the whole music lands
 //                 re-rooted on the new tonal center
-//           SHIFT+X = fumble: the music falls (tape dive) and the top loop
-//                 layer is lost; during flight = crash landing (no modulation)
+//           SHIFT+X = fumble: a comic stumble — the tape dives and gets back
+//                 up, nothing is lost; during flight = crash landing
 #include <AudioToolbox/AudioToolbox.h>
 #include <signal.h>
 #include <termios.h>
@@ -83,11 +83,6 @@ void setLoopRate(float r) { g_looper.setRate(r * kReichDrift); }
 
 bool g_harmony = false;  // SHIFT+H: a quiet harmonic shadow one row above
 
-// The age dial (SHIFT+A) — the instrument grows with the child:
-// 0 = MALUCH (2-3): pentatonic chime, no switches; 1 = SREDNIAK (4-6):
-// only the happy scales; 2 = DUZY (7+): everything. Persisted in the soul.
-int g_age = 2;
-const char* kAgeNames[3] = {"2-3", "4-6", "7+"};
 // the echo's raw tape, shared with the FREEZE capture
 int16_t* g_echoStorage = nullptr;
 uint32_t g_echoFrames = 0;
@@ -131,7 +126,7 @@ struct Weather {
 };
 Weather g_weather;
 
-// Ghost garden: minutes-scale memory. After ~12 s of silence the box quietly
+// Ghost garden: minutes-scale memory. After ~7 s of silence the box quietly
 // re-sows the player's own notes from the recent past (soft attack, low
 // velocity, sometimes transposed by a pure interval). The player's first
 // real key silences the ghosts immediately — it never fights the human.
@@ -147,7 +142,9 @@ struct GhostGarden {
 };
 GhostGarden g_garden;
 constexpr int32_t kGhostIdBase = 1100;
-constexpr double kGhostIdleSec = 12.0;
+// 7 s, synced with the device: 12 s made the box's memory practically
+// inaudible in normal play (a child does not pause that long)
+constexpr double kGhostIdleSec = 7.0;
 // Cat, not Furby: the box never solicits play. Ghosts may only CONTINUE a
 // session the human started — with soul-loaded memories the garden is full
 // at boot, and without this gate it would start singing on its own.
@@ -214,9 +211,9 @@ float micPop() {
   return v;
 }
 
-// VOICE capture: while the ear is open, the last ~2 s of the mic also land
-// in a analysis buffer; on close we hunt for the loudest pitch-stable window
-// and the keyboard starts singing with the player's own voice.
+// DUET capture: while the ear is open, the last ~2 s of the mic also land
+// in an analysis ring; duetTick() reads the freshest window out of it for
+// live pitch tracking of the singer.
 constexpr uint32_t kCapMax = 96000;  // 2 s @ 48 kHz
 float g_capBuf[kCapMax];
 std::atomic<uint32_t> g_capCount{0};
@@ -274,7 +271,7 @@ bool earOpen() {
   }
   g_micHead.store(0);
   g_micTail.store(0);
-  g_capCount.store(0);  // a fresh take for the voice hunter
+  g_capCount.store(0);  // a fresh take for the duet analysis
   if (AudioQueueStart(g_inQueue, nullptr) != noErr) {
     AudioQueueDispose(g_inQueue, true);
     g_inQueue = nullptr;
@@ -756,7 +753,6 @@ void printStatus(const Ui& ui) {
   }
   if (g_earOpen.load(std::memory_order_relaxed)) printf(" UCHO");
   if (g_duetOn.load(std::memory_order_relaxed)) printf(" DUET");
-  if (g_age != 2) printf(" wiek:%s", kAgeNames[g_age]);
   if (g_pulse.ticking)
     printf(" puls:%d", (int)(60.0 / g_pulse.period + 0.5));
   if (g_harmony) printf(" harm:ON");
@@ -916,7 +912,7 @@ void soulSave(const Ui& ui) {
                      2 * GhostGarden::kCap) % GhostGarden::kCap;
     fprintf(f, " %.2f", (double)g_garden.ring[idx].cents);
   }
-  fprintf(f, "\nage %d\n", g_age);
+  fprintf(f, "\n");
   fclose(f);
 }
 
@@ -955,8 +951,10 @@ bool soulLoad(Ui& ui) {
       g_garden.count = m;
       g_garden.head = m % GhostGarden::kCap;
     }
+    // legacy field from the removed age dial: read and discard, so souls
+    // written by older builds still load cleanly
     int a = 2;
-    if (fscanf(f, " age %d", &a) == 1 && a >= 0 && a <= 2) g_age = a;
+    (void)fscanf(f, " age %d", &a);
     ok = true;
   }
   fclose(f);
@@ -1158,8 +1156,8 @@ int main(int argc, char** argv) {
   g_strings.setRootHz(220.0f);
 
   // Loop storage lives for the whole run; allocated before audio starts.
-  // 8 undo levels: the host has RAM to spare, and the fumble gesture eats
-  // one level per crash — a single level felt broken in play-testing.
+  // 8 undo levels: the host has RAM to spare, and a single level felt
+  // broken in play-testing.
   constexpr int kUndoDepth = 8;
   static std::vector<int16_t> mixBuf((size_t)kMaxLoopSec * kSr);
   static std::vector<int16_t> layerBuf((size_t)kMaxLoopSec * kSr);
@@ -1216,7 +1214,7 @@ int main(int argc, char** argv) {
   printf("  arrows <- -> bend | up/down filter | ENTER panic+re-center | ESC quit\n");
   printf("  FREEZE: SHIFT+F — to co teraz slychac staje sie PODLOGA (petla\n"
          "          wstecz z pamieci echa; lata z rzutami, SHIFT+U cofa)\n");
-  printf("  DUCHY:  po ~12 s ciszy pudelko cicho dosiewa twoje wlasne nuty;\n"
+  printf("  DUCHY:  po ~7 s ciszy pudelko cicho dosiewa twoje wlasne nuty;\n"
          "          pierwszy klawisz je ucisza | SHIFT+W nagrywa sesje do WAV\n");
   printf("  TLO:    SHIFT+D i klikasz nuty = wybierasz wlasny dron pod spodem\n"
          "          (max 4, klik drugi raz usuwa) | SHIFT+S struny sympatyczne\n");
@@ -1225,8 +1223,6 @@ int main(int argc, char** argv) {
   printf("  PULS:   graj rowno kilka nut, a dolaczy serce grajace ARPEGGIO\n"
          "          TWOJEGO TLA w twoim tempie; plynie za toba (tez na\n"
          "          polnuty/osemki), a gdy przestajesz — samo puszcza\n");
-  printf("  WIEK:   SHIFT+A cykluje 2-3 / 4-6 / 7+ — pudelko rosnie z\n"
-         "          dzieckiem (maluch: pentatonika i zero pokretel)\n");
   printf("  UCHO:   TRZYMAJ SHIFT+M i spiewaj — pudelko CICHO NUCI POD TOBA\n"
          "          czysty interwal (DUET, slizga sie legato za glosem); po\n"
          "          puszczeniu ODPOWIADA — glos wraca z tasmy, strun i\n"
@@ -1238,7 +1234,7 @@ int main(int argc, char** argv) {
          " (max %ds)\n", kMaxLoopSec);
   printf("  RZUT:   SPACE = wyrzut ... SPACE = chwyt (czas lotu -> szczebel JI)\n"
          "          strzalki W LOCIE = spin (-> w gore / <- w dol, wiecej = zawrot)\n"
-         "          SHIFT+X = fuszerka (muzyka upada, tracisz warstwe)\n\n");
+         "          SHIFT+X = fuszerka (muzyka sie potyka i wstaje, nic nie ginie)\n\n");
 
   Ui ui;
   const bool soulLoaded = soulLoad(ui);
@@ -1273,9 +1269,6 @@ int main(int argc, char** argv) {
     if (b >= 0) {
       const char c = (char)b;
       KeyPos kp;
-      // any human input marks presence: sowing pauses, sounding ghosts bow out
-      g_garden.lastInput = nowSec();
-      gardenSilenceGhosts();
       if (c == 0x1B) {  // ESC alone, or an escape sequence
         const int c2 = readByte(40);
         if (c2 < 0) {
@@ -1311,36 +1304,13 @@ int main(int argc, char** argv) {
       } else if (c == 'X') {
         fumble();
       } else if (c == '\t') {
-        if (g_age == 0) {
-          // MALUCH: the scale is not a knob
-        } else if (g_age == 1) {
-          ui.scale = ui.scale == (int)ScaleId::PENTA ? (int)ScaleId::MAJOR
-                                                     : (int)ScaleId::PENTA;
-          allOff();
-          backgroundApply();
-        } else {
-          ui.scale = (ui.scale + 1) % (int)ScaleId::Count;
-          allOff();  // clean retuning
-          backgroundApply();
-        }
+        ui.scale = (ui.scale + 1) % (int)ScaleId::Count;
+        allOff();  // clean retuning
+        backgroundApply();
       } else if (c == '`') {
-        if (g_age > 0) {
-          ui.preset = (ui.preset + 1) % kNumTimbrePresets;
-          g_uiPreset = ui.preset;
-          g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
-        }
-      } else if (c == 'A') {
-        g_age = (g_age + 1) % 3;
-        if (g_age == 0) {  // the toddler tier locks the perfect world in
-          ui.scale = (int)ScaleId::PENTA;
-          ui.preset = 3;
-          g_uiPreset = 3;
-          g_engine.setParam(Param::TimbrePreset, 3.0f);
-          g_pickMode = false;
-        } else if (g_age == 1 && ui.scale != (int)ScaleId::PENTA &&
-                   ui.scale != (int)ScaleId::MAJOR) {
-          ui.scale = (int)ScaleId::PENTA;
-        }
+        ui.preset = (ui.preset + 1) % kNumTimbrePresets;
+        g_uiPreset = ui.preset;
+        g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
       } else if (c == 0x7F || c == 0x08) {  // backspace
         ui.octave = (ui.octave + 1) % 4;
         applyCenter(ui);
@@ -1365,16 +1335,12 @@ int main(int argc, char** argv) {
         g_tampura = !g_tampura;
         backgroundApply();
       } else if (c == 'D') {
-        if (g_age == 0) {
-          // MALUCH: no pick mode — the background is not a knob either
-        } else {
-          g_pickMode = !g_pickMode;
-          if (g_pickMode)
-            printf("\n  >> WYBOR TLA: klikaj nuty siatki (toggle, max 4);"
-                   " SHIFT+D konczy\n");
-          else
-            printf("\n  >> tlo ustawione (%d nut)\n", g_bgCount);
-        }
+        g_pickMode = !g_pickMode;
+        if (g_pickMode)
+          printf("\n  >> WYBOR TLA: klikaj nuty siatki (toggle, max 4);"
+                 " SHIFT+D konczy\n");
+        else
+          printf("\n  >> tlo ustawione (%d nut)\n", g_bgCount);
       } else if (c == 'S') {
         g_strings.setEnabled(!g_strings.enabled());
       } else if (c == 'V') {
@@ -1406,10 +1372,24 @@ int main(int argc, char** argv) {
         // undoes like a layer); the echo then flows on above it. Capture
         // runs on the audio thread next block; the tape is cleared shortly
         // AFTER so the copy sees it intact.
-        g_looper.requestCapture(g_echoStorage, g_echoFrames);
-        schedule(0.08, [] { g_echo.clearTape(); });
-        printf("\n  >> FREEZE — ostatnie %.0f s pamieci staje sie podloga\n",
-               (double)kEchoSec);
+        // The looper only accepts a capture into an empty loop or one of
+        // the SAME length (mirrors applyCommands) — wiping the tape on a
+        // rejected capture would lose the memory and produce no floor.
+        const Looper::State ls = g_looper.state();
+        const bool accepted =
+            ls == Looper::State::Empty ||
+            ((ls == Looper::State::Play || ls == Looper::State::Stopped ||
+              ls == Looper::State::Overdub) &&
+             g_looper.lengthFrames() == g_echoFrames);
+        if (accepted) {
+          g_looper.requestCapture(g_echoStorage, g_echoFrames);
+          schedule(0.08, [] { g_echo.clearTape(); });
+          printf("\n  >> FREEZE — ostatnie %.0f s pamieci staje sie podloga\n",
+                 (double)kEchoSec);
+        } else {
+          printf("\n  >> FREEZE niemozliwy: petla ma inna dlugosc"
+                 " (SHIFT+C czysci)\n");
+        }
       } else if (c == 'R') {
         g_looper.toggleRecord();
       } else if (c == 'P') {
@@ -1446,6 +1426,11 @@ int main(int argc, char** argv) {
         applyCenter(ui);
         backgroundApply();
       } else if (keyToGrid(c, kp)) {
+        // presence = real musical keys only: arrows, ESC sequences and
+        // control chords must not count as playing (every raw byte used to
+        // silence the ghosts, so waving the filter shooed them away)
+        g_garden.lastInput = nowSec();
+        gardenSilenceGhosts();
         const int id = kp.row * 14 + kp.col;
         const float cents = gridToCents((ScaleId)ui.scale, kp.col, kp.row);
         if (g_pickMode) {
