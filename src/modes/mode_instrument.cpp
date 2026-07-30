@@ -256,52 +256,64 @@ void ModeInstrument::tick(ModeCtx& ctx, float dt) {
 }
 
 void ModeInstrument::draw(ModeCtx& ctx) {
+  // The PHYSICAL keys are the interface — no virtual keyboard mirror.
+  // The screen shows state big and leaves room to breathe.
   auto& g = ctx.canvas;
   g.fillSprite(TFT_BLACK);
-  g.setTextSize(1);
-  g.setTextColor(TFT_WHITE, TFT_BLACK);
-
   char buf[64];
-  snprintf(buf, sizeof buf, "%s | %s | %d Hz | ctr %+d c | %s",
+
+  g.setTextSize(1);
+  g.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  snprintf(buf, sizeof buf, "%s  |  %s  |  %d Hz  |  %s",
            scaleInfo(scale_).name, kPresetNames[preset_],
-           (int)kBaseOctaves[octave_], (int)centerCents_,
-           age::label(age::tier()));
+           (int)kBaseOctaves[octave_], age::label(age::tier()));
   g.drawString(buf, 4, 3);
   g.drawFastHLine(0, 14, 240, TFT_DARKGREY);
 
-  // 13x4 grid; screen row 0 = the top physical row (row 0)
-  for (int row = 0; row < 4; ++row) {
-    for (int col = 1; col <= 13; ++col) {
-      const int x = 8 + (col - 1) * 17;
-      const int y = 20 + row * 17;
-      const bool on = (held_ >> (row * 14 + col)) & 1;
-      if (on)
-        g.fillRoundRect(x, y, 15, 15, 2, TFT_ORANGE);
-      else
-        g.drawRoundRect(x, y, 15, 15, 2, TFT_DARKGREY);
-    }
+  // big center area: one thing at a time, readable from across a room
+  g.setTextColor(TFT_ORANGE, TFT_BLACK);
+  if (toss_ == TossPhase::Flight) {
+    g.setTextSize(3);
+    g.drawString("LOT!", 80, 45);
+  } else if (ctrlHeld_) {
+    g.setTextSize(2);
+    g.drawString("TLO: graj nuty", 30, 40);
+    g.setTextSize(1);
+    snprintf(buf, sizeof buf, "wybrane: %d/4", ambient::backgroundCount());
+    g.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    g.drawString(buf, 30, 65);
+  } else {
+    g.setTextSize(2);
+    if ((int)centerCents_ != 0)
+      snprintf(buf, sizeof buf, "centrum %+d c", (int)centerCents_);
+    else if (lastLandCents_ != 0.0f)
+      snprintf(buf, sizeof buf, "w domu (1/1)");
+    else
+      snprintf(buf, sizeof buf, "graj / rzuc / sluchaj");
+    g.drawString(buf, 14, 40);
+    // a quiet life sign: one dot per sounding voice
+    g.setTextSize(1);
+    const int v = lastVoices_ > 10 ? 10 : lastVoices_;
+    for (int i = 0; i < v; ++i)
+      g.fillCircle(20 + i * 20, 78, 4, TFT_ORANGE);
+    for (int i = v; i < 10; ++i)
+      g.drawCircle(20 + i * 20, 78, 4, TFT_DARKGREY);
   }
 
   g.drawFastHLine(0, 92, 240, TFT_DARKGREY);
+  g.setTextSize(1);
   g.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  if (toss_ == TossPhase::Flight)
-    g.drawString("LOT... zlap mnie", 4, 97);
-  else if (ctrlHeld_)
-    g.drawString("TLO: nacisnij nuty (ctrl trzymasz)", 4, 97);
-  else
-    g.drawString("` skala  tab barwa  fn IMU  ctrl okt/TLO", 4, 97);
+  g.drawString("` skala  tab barwa  fn IMU  ctrl okt/TLO", 4, 97);
 
   if (imuRole_ == ImuRole::Bend)
-    snprintf(buf, sizeof buf, "IMU %s %+d c  tlo %d  glosy %d  GO=menu",
-             roleName(imuRole_), (int)imuShown_, ambient::backgroundCount(),
-             lastVoices_);
+    snprintf(buf, sizeof buf, "IMU %s %+d c  tlo %d  GO=menu",
+             roleName(imuRole_), (int)imuShown_, ambient::backgroundCount());
   else if (imuRole_ == ImuRole::Filter)
-    snprintf(buf, sizeof buf, "IMU %s %d Hz  tlo %d  glosy %d  GO=menu",
-             roleName(imuRole_), (int)imuShown_, ambient::backgroundCount(),
-             lastVoices_);
+    snprintf(buf, sizeof buf, "IMU %s %d Hz  tlo %d  GO=menu",
+             roleName(imuRole_), (int)imuShown_, ambient::backgroundCount());
   else
-    snprintf(buf, sizeof buf, "IMU %s  tlo %d  glosy %d  GO=menu",
-             roleName(imuRole_), ambient::backgroundCount(), lastVoices_);
+    snprintf(buf, sizeof buf, "IMU %s  tlo %d  GO=menu", roleName(imuRole_),
+             ambient::backgroundCount());
   g.setTextColor(TFT_WHITE, TFT_BLACK);
   g.drawString(buf, 4, 122);
 }
