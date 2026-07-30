@@ -21,8 +21,9 @@ the design laws that survived the process:
    any random key, any random pair of keys, sounds intentional.
 2. **Cat, not Furby.** The box never solicits play. Every sound traces back
    to a human act: pick it up and it purrs, play and it remembers, leave it
-   and it goes quiet. The microphone runs only while a key is held; nothing
-   is ever stored.
+   and it goes quiet. The microphone listens only inside SPIEW mode's
+   listening windows; beyond a 3-second answer buffer in RAM, nothing is
+   ever stored.
 3. **Tempo is discovered, not declared.** There is no BPM anywhere. Play a
    few even notes and a quiet heart joins in *your* time (a phase-locked
    loop on your key presses); drift into rubato and it lets go.
@@ -35,12 +36,14 @@ the design laws that survived the process:
    chord, your scale, the notes you played — and greets you the next day
    with one of them.
 
-The gestures on top: **shake** the box and it rattles a melody in scale —
-every swing chimes one note, the waving direction steers it up or down,
-the swing energy sets the loudness; **tilt** it and everything darkens or
-brightens (slow and smooth, like turning the box away from the light);
-**sing** into the ear and the tape returns you, darker each pass, haloed
-by strings tuned to pure intervals.
+The gestures on top: **shake** the box and it rattles the child's own
+remembered notes — every swing replays one, the waving direction steers
+the occasional transposition up or down, the swing energy sets the
+loudness; **tilt** it and everything darkens or brightens (slow and
+smooth, like turning the box away from the light); **lay it face-down**
+after playing and the day's notes sing themselves to sleep; **sing** into
+the ear and the box answers with your own voice through the aging tape,
+humming a consonant companion under it.
 
 ## Status
 
@@ -48,10 +51,19 @@ by strings tuned to pure intervals.
   designed and measured — see below.
 - **Device firmware**: plays on real hardware — the whole chain is ported
   (engine → strings → lo-fi tape → reverb, ambient brain, IMU gestures)
-  with five visualization scenes and a menu-less UI.
-- **Microphone on the device: not working yet**, and the reason is worth
-  writing down (see [The ear](#the-ear-microphone-on-the-adv--open-problem)).
-  Everything else on this list is verified by playing it.
+  with five visualization scenes and a menu-less UI. On top of that, all
+  on the device now: the **heart** (tempo entrainment — a PLL on your key
+  presses), the **soul** (the memory garden, a hand-picked chord and the
+  pulse survive the power switch; the box greets you next morning with a
+  remembered note), a **WS2812 firefly** that flashes in the color of each
+  note and dims with the battery, the **goodnight lullaby** (lay it
+  face-down), **psychoacoustic bass** voiced for the 3 cm speaker, the
+  grid tuned to the *physical* keyboard stagger (4-T-F-C is one chord),
+  and the EDO scales lifted an octave into the same register as the JI
+  scales.
+- **The ear (microphone)**: root cause found, walkie-talkie implemented
+  (see [The ear](#the-ear--a-walkie-talkie)) — **needs validation on
+  hardware**. Everything else on this list is verified by playing it.
 
 ---
 
@@ -69,9 +81,14 @@ host/               PC targets for shaping the sound without flashing
 src/                ESP32 firmware (PlatformIO / Arduino core 3.x):
   hal/              I2S + ES8311, pins (board_pins.h — all verified)
   input/            keyboard (TCA8418 polled over I2C) + BtnGO
-  modes/            INSTRUMENT (play), SPIEW (play + open ear), USTAWIENIA
+  modes/            INSTRUMENT (play), SPIEW (play + listening windows),
+                    USTAWIENIA
   viz.cpp           five visualization scenes — same music, different worlds
-  duet.cpp          live pitch tracking: the box hums along with a singer
+  duet.cpp          pitch tracking in the listening window; records the
+                    companion track that the answer hums
+  pulse.cpp         the heart: tempo entrainment (a PLL on key presses)
+  soul.cpp          what survives the power switch (garden/chord/pulse, NVS)
+  firefly.cpp       the WS2812 firefly + battery dusk
   settings.cpp      shared musical state (scale/timbre/octave/scene), in NVS
   main.cpp          main loop; boots straight into playing
 ```
@@ -86,12 +103,14 @@ afplay out/01_single_note.wav
 ```
 
 `grajek_live`: 4 laptop keyboard rows = 4 instrument grid rows (the bottom
-`zxcv…` row plays lowest). A terminal has no key-up events, so a note fades
-0.6 s after release (auto-repeat sustains it), and **SHIFT+L toggles LATCH
-mode**: a key press turns a note on permanently, a second press turns it
-off — that is how you build drones. `TAB` scale, `` ` `` timbre, `BACKSPACE`
-octave, arrows = IMU stand-in (left/right bend, up/down filter), `ENTER`
-panic + re-center, `ESC` quit.
+`zxcv…` row plays lowest; a laptop row reaches 10–12 of the grid's 14
+columns — enough to design with, the device has all 14). A terminal has no
+key-up events, so a note fades 0.6 s after release (auto-repeat sustains
+it), and **SHIFT+L toggles LATCH mode**: a key press turns a note on
+permanently, a second press turns it off — that is how you build drones.
+`TAB` scale, `` ` `` timbre, `BACKSPACE` octave, `SHIFT+B` A/Bs the
+psychoacoustic bass, arrows = IMU stand-in (left/right bend, up/down
+filter), `ENTER` panic + re-center, `ESC` quit.
 
 **Toss simulator** (a laptop-only toy — on the device the throw gave way to
 the shake-rattle gesture): `SPACE` throws the whole music into a rising glissando
@@ -99,17 +118,19 @@ the shake-rattle gesture): `SPACE` throws the whole music into a rising glissand
 (right = land upward/otonal, left = land downward/utonal; more spin = flight
 warble + a dizzy landing), `SPACE` again catches: flight time picks the rung
 of the JI ladder (9/8, 5/4, 3/2, 7/4, 2/1) and everything lands re-rooted on
-the new tonal center. `SHIFT+X` = fumble: tape-dive crash, the top loop layer
-is lost.
+the new tonal center. `SHIFT+X` = fumble: a comic tape-dive stumble — the
+music trips and gets back up, nothing is lost.
 
-**Looper** (`lib/grajek_audio/ga_looper.*` — the same core the device LOOP
-mode will use, fed there by the microphone): `SHIFT+R` starts the first
-recording, pressed again it closes the loop and defines its length; from then
-on `SHIFT+R` toggles overdub (each take commits one layer). `SHIFT+P`
-play/stop, `SHIFT+U` undo the last layer, `SHIFT+C` clear, `SHIFT+[` /
-`SHIFT+]` loop playback volume (default 80% — leaves headroom to play over
-the loop). Record a phrase, let it circle, layer on top — panic (`ENTER`)
-silences the synth but keeps the loop running.
+**Looper** (`lib/grajek_audio/ga_looper.*` — host-only for now, see the
+roadmap): `SHIFT+R` starts the first recording, pressed again it closes
+the loop and defines its length; from then on `SHIFT+R` toggles overdub
+(each take commits one layer). `SHIFT+P` play/stop, `SHIFT+U` undo the
+last layer, `SHIFT+C` clear, `SHIFT+[` / `SHIFT+]` loop playback volume
+(default 80% — leaves headroom to play over the loop). `SHIFT+F` freezes
+what you hear into a floor loop — and clears the echo tape only when the
+looper actually accepts the capture. Record a phrase, let it circle,
+layer on top — panic (`ENTER`) silences the synth but keeps the loop
+running. Ghosts wait 7 s of silence, same as the device.
 
 The engine applies equal-power polyphony compensation (1/sqrt(voices),
 slowly smoothed), so a held chord sits at roughly the level of a single
@@ -139,9 +160,10 @@ Everything else hangs off the one side button:
 | any key | plays (column = scale step, bottom row = lowest) |
 | **short BtnGO** | toggles playing ⇄ settings screen |
 | **hold BtnGO** | next timbre (repeats every 0.7 s, the name flashes) |
-| **shake** | the *wind of memories* — each swing plays back a note the child really played |
+| **shake** | the *wind of memories* — each swing plays back a note the child really played; the waving direction steers the occasional transposition up or down |
 | **tilt sideways** | brightness: darkens or opens the sound (filter) |
 | **tilt toward / away** | depth: the sound moves into the reverb and echo, or comes close and dry |
+| **lay face-down** (after playing) | goodnight: the day's notes replay as a slowing, darkening lullaby, then real sleep — lifting the box or any key wakes it instantly |
 
 The settings screen (short BtnGO) has six rows, each cycled by its digit
 and persisted in NVS: **scale** (ordered happy → strange: pentatonic JI,
@@ -177,47 +199,44 @@ The same notes, memories and gestures drive five scenes that differ in
 
 Same portable modules as the host: engine → sympathetic strings → echo tape
 (3 s at 16 kHz behind a lo-fi rate bridge — no PSRAM, and the aging tape
-loves the darkening anyway) → reverb → a hard child-ear ceiling. The
-ambient brain (background chord, weather, ghost garden) runs from boot.
-Deferred to v2: FREEZE/looper floor (RAM audit on real hardware first),
-psychoacoustic bass for the tiny speaker, and the ear (below).
+loves the darkening anyway) → reverb → speaker voicing (a 180 Hz high-pass
+plus a gentle presence shelf: the membrane is never asked for air it cannot
+move, while the engine's **virtual-pitch bass** shifts each low note's
+fundamental energy into partials the ear rebuilds the bass from) → a hard
+child-ear ceiling. The ambient brain (background chord, weather, ghost
+garden) runs from boot. Still deferred: the FREEZE/looper floor (RAM audit
+on real hardware first).
 
-### The ear (microphone on the ADV) — open problem
+### The ear — a walkie-talkie
 
-`SPIEW` mode is written and waiting: the voice would enter the chain where
-the synth does, a voice-gated duck keeps the mic→speaker loop from closing
-(sing → the music steps aside and the tape records you; stop → the box
-answers with your own voice), and `duet.cpp` tracks the singer's pitch live
-to hum a consonant scale tone below it. It all works on the laptop.
+The mystery is solved. The factory microphone path (`M5.Mic`) is an I2S
+**master** on the very pads our TX drives (BCLK=G41, WS=G43, DIN=G46), on
+a codec that has no MCLK line — and two masters cannot share one bus. The
+48 kHz full-duplex slave we chased for a whole night **never had a
+chance**. The factory path runs at 16 kHz with raw clock dividers written
+while the channel is disabled, then a clean clock start; the ES8311 only
+latches its ADC config on such a clean start. (The dead ends of that
+night live in git history, where they belong.)
 
-On the device the codec's ADC stays silent, and here is what a night of
-measuring established, in case it saves someone else the same night:
+So the ear is a **walkie-talkie**, which fits the design anyway — the
+speaker was always meant to be quiet while the child sings:
 
-- The **hardware is fine** — the factory UserDemo records happily on the
-  same unit, and the pin (ASDOUT → G46) matches the schematic.
-- **Not a register problem.** Faithful transcriptions of `esp-bsp`,
-  `esp-adf` *and* the official M5Unified sequences all leave the line idle,
-  and so does the exact register set snorted from the factory firmware
-  while it was recording.
-- **Two real findings on the way:** the ES8311 only latches its ADC
-  configuration on a *clean clock start* (write registers with I2S
-  disabled, then enable — writes while BCLK runs do nothing), and the
-  `i2s_std` driver in full-duplex mode does not route the DIN pad to the
-  RX unit at all (a GPIO-matrix loopback of our own TX proves the RX side
-  works; the fix is an explicit `esp_rom_gpio_connect_in_signal`).
-- **Diagnosis:** M5Unified's `Mic_Class::mic_task` drives the I2S unit
-  *below* the driver — raw clock dividers (`i2s_ll_rx_set_raw_clk_div`),
-  its own `rx_bck_div_num`, an explicit RX reset. That is what the ADC
-  apparently needs on this board, and nothing assembled from the public
-  `i2s_std` API reproduces it.
-- **Plan:** stop re-deriving it and use `M5.Mic` itself inside the
-  listening windows — which fits the walkie-talkie design anyway, since
-  the speaker is meant to be quiet while the child sings.
+- when the keys go quiet in `SPIEW`, the speaker stops and hands the whole
+  bus to `M5.Mic` (16 kHz, the factory-proven path);
+- the box listens: `duet.cpp` tracks the singer's pitch, plants the sung
+  notes in the memory garden, and records a companion track a third below
+  the voice;
+- stop singing, and the codec is re-latched at dead clocks, the speaker
+  returns, and the box **answers** — the captured voice re-enters the
+  chain exactly where the synth does (the tape ages it, the strings halo
+  it) while the companion hums under it, in time;
+- **any key closes the window instantly.** Keys always win.
 
-The firmware keeps a serial diagnostic console for this hunt (single
-letters over `Serial`: dump codec registers, probe the RX stream, GPIO
-loopback, relatch the clocks, `Wrrvv` writes any register) — see
-`hal::audioDiag` in `src/hal/audio_out.cpp`.
+**Status: implemented, needs validation on hardware.** The serial console
+proves the cycle piecewise: `M` runs an automatic 700 ms window + answer
+(the whole walkie-talkie in one letter), `e` opens/closes a window by
+hand, `x` prints capture stats, `r`/`g`/`k`/`l`/`p` and `Wrrvv` remain
+for codec work — see `hal::audioDiag` in `src/hal/audio_out.cpp`.
 
 ## Hardware — facts verified against official sources
 
@@ -253,7 +272,13 @@ quotes in `src/hal/board_pins.h`.
   I2C every pass instead, and do not call `M5Cardputer.update()` at all so
   nothing else drains that FIFO.
 - Isomorphic grid: column = +1 scale step, row ≈ a fourth (EDO) or +octave
-  (JI); the geometry follows from the scale (`ga_scales.cpp`).
+  (JI); the geometry follows from the scale (`ga_scales.cpp`). Two facts
+  of physics are compensated in the mapping: the EDO grids are lifted one
+  octave (fourth-stacked rows span far less than octave rows, so without
+  the lift switching PENTA → EDO dropped the whole keyboard by over an
+  octave), and the digit row maps to `col+1` because the physical top row
+  is staggered one key to the right — the column the **eye** sees
+  (4-T-F-C) is the column that plays one chord.
 
 ## What to check after flashing
 
@@ -263,26 +288,40 @@ quotes in `src/hal/board_pins.h`.
    hold several keys, shake, switch scenes.
 3. Short BtnGO opens settings and returns; holding it while playing cycles
    the timbre; every choice survives a power cycle (NVS).
-4. Shaking replays remembered notes (one swing = one note, not a burst);
-   both tilts respond smoothly — if an axis feels swapped, exchange
-   `gravX_` / `gravY_` in `imuStep()`.
+4. Shaking replays remembered notes (one swing = one note, not a burst)
+   and waving left/right steers them down/up; both tilts respond smoothly
+   — if an axis feels swapped, exchange `s_gravX` / `s_gravY` in
+   `imuStep()`.
 5. The 3.5 mm jack mutes the speaker (purely hardware — should just work).
    It is also the way to record the box cleanly: the tiny speaker does not
    do it justice.
+6. Play a few even notes: a quiet MUSICBOX heartbeat joins in your tempo
+   and lets go when you stop or drift into rubato.
+7. Power-cycle after playing: a moment after boot the box greets you with
+   ONE remembered note — and ghosts never start sowing before you play.
+8. The firefly (WS2812) flashes with every note — the same note is always
+   the same color — glows softly when a ghost replays a memory, and stays
+   completely dark when idle.
+9. Lay it face-down after playing: the lullaby retells the day and the box
+   falls asleep; lift it (or press any key) and it wakes instantly.
+10. Over serial, `M` proves the whole ear cycle (700 ms of listening → the
+    speaker comes back → the box answers with what it heard). Then switch
+    on "6 ucho" and sing to it.
 
 ## Roadmap
 
 1. ✅ A playing core on the PC (WAV + live playing) and the ESP32 firmware
    with INSTRUMENT, gestures and the visualization scenes
-2. The ear: switch the listening windows to `M5.Mic` (see
-   [The ear](#the-ear-microphone-on-the-adv--open-problem)) — that unlocks
-   SPIEW on the device, and the mic looper after it
-3. LOOP — microphone looper. The layered looper core is DONE and playable on
-   the host (see above); what remains is the input path above. No PSRAM:
-   ~200 KB of RAM for loops → mono 16-bit @ 24 kHz ≈ 4 s of loop in RAM
-   (2 buffers, no undo), or stream to microSD.
-4. DRONE — generative mode; "lying flat" detection hooks into the existing
-   BMI270 path.
-5. IR CONDUCTOR — NEC sequencer on G44 (RMT). Learning codes from a remote
-   needs an IR receiver the ADV **does not have** — so: a protocol database
-   plus optional learning via a Grove-connected receiver (G1/G2).
+2. ✅ The heart and the soul on the device: tempo entrainment, NVS memory
+   with the waking greeting, the goodnight lullaby (the old "DRONE mode"
+   idea, realized as a behavior instead of a mode — zero settings rows),
+   the firefly, the psychoacoustic bass
+3. **The ear: validate the walkie-talkie on hardware** (diag `M`, then
+   `SPIEW`) and tune the voice thresholds by ear over the serial telemetry
+4. LOOP — microphone looper, **deliberately parked**: a record/overdub
+   transport is configuration (against design law 4), and RAM is on the
+   edge (~200 KB free → two mono 16-bit buffers @ 24 kHz ≈ 2 s each, no
+   undo). If it ever returns, it returns as a gesture, not a transport.
+5. ~~IR CONDUCTOR~~ — dropped. It needs an IR receiver the ADV does not
+   have, and it strengthens no design law; the IR TX pin stays free for an
+   idea that earns its place.

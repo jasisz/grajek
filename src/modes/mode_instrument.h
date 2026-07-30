@@ -14,7 +14,8 @@
 //               przestrzeni (pogłos+echo). Oba wygładzone (~0.4 s), stałe,
 //               bez żadnych przełączników
 //
-// Ekran to wizualizacja "nocna łąka" (viz.h) — bez tekstu podczas grania.
+// Ekran to jedna z pięciu scen wizualizacji (viz.h) — bez tekstu podczas
+// grania; scenę wybiera się w ustawieniach.
 #pragma once
 #include <stdint.h>
 

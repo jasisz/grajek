@@ -11,7 +11,6 @@ uint64_t s_cur = 0;
 
 bool s_goLast = false;
 uint32_t s_goChangedAt = 0;
-bool s_goPressEdge = false;
 bool s_goReleaseEdge = false;
 
 // TCA8418: rejestry zdarzeń (Adafruit_TCA8418_registers.h)
@@ -50,14 +49,13 @@ void keysInit() {
 
 int keysPoll(KeyEvent* out, int maxEvents) {
   // próbka GO raz na przebieg — krawędzie żyją do następnego keysPoll
-  s_goPressEdge = s_goReleaseEdge = false;
+  s_goReleaseEdge = false;
   const bool goDown = digitalRead(hal::kPinBtnGo) == LOW;
   const uint32_t now = millis();
   if (goDown != s_goLast && (now - s_goChangedAt) > 30) {
     s_goLast = goDown;
     s_goChangedAt = now;
-    if (goDown) s_goPressEdge = true;
-    else s_goReleaseEdge = true;
+    if (!goDown) s_goReleaseEdge = true;
   }
 
   int n = 0;
@@ -84,13 +82,6 @@ int keysPoll(KeyEvent* out, int maxEvents) {
     M5.In_I2C.writeRegister8(hal::kTca8418Addr, kRegIntStat, 0x0F, kI2cFreq);
   return n;
 }
-
-bool keyHeld(int col, int row) {
-  if (col < 0 || col >= 14 || row < 0 || row >= 4) return false;
-  return (s_cur >> bitIndex(col, row)) & 1;
-}
-
-bool goPressed() { return s_goPressEdge; }
 
 bool goReleased() { return s_goReleaseEdge; }
 

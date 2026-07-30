@@ -5,7 +5,7 @@
 // a handful of repeats.
 //
 // v2 — a tape that FORGETS instead of copying: every pass through the
-// feedback path darkens (one-pole lowpass ~3 kHz), sheds mud (one-pole
+// feedback path darkens (one-pole lowpass ~4.5 kHz), sheds mud (one-pole
 // highpass ~150 Hz, doubling as a DC blocker), and saturates softly; the
 // read head wanders slowly (tape wow), and a second read tap at the golden
 // ratio of the loop length (with its own slow drift) breaks the metronomic

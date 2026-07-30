@@ -70,8 +70,8 @@ class Looper {
   // Varispeed: tape-style playback rate (pitch and tempo together), smoothed
   // in the audio thread. 1.0 = as recorded. Used by the toss gesture — the
   // whole loop lifts in flight and lands on a new tonal center — and by the
-  // fumble crash (rate dive). Overdub writing pauses while rate is away from
-  // 1.0 (positions would smear across the layer buffer).
+  // fumble crash (rate dive). Overdub keeps writing at any rate; layers
+  // recorded off-speed smear slightly, which the tape aesthetic forgives.
   void setRate(float v) {
     if (v < 0.1f) v = 0.1f;
     if (v > 4.0f) v = 4.0f;

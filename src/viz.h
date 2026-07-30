@@ -1,18 +1,22 @@
-// Nocna łąka — wizualizacja muzyki na 240x135, zero tekstu podczas grania.
+// Music made visible on 240x135 — five scenes, one world, zero text while
+// playing. Every scene draws the same shared state (sounding notes, the
+// memory seeds, ghosts, the background chord, the weather's breath) with a
+// different composition and motion — see the scene list below.
 //
-// Metafora spójna z tym, co słychać:
-//   nuta      -> świetlik: pojawia się na wysokości dźwięku, świeci póki brzmi
-//   koniec    -> świetlik opada w łąkę i zostaje jako przygaszona iskierka
-//                (pamięć ogrodu duchów, wreszcie WIDOCZNA)
-//   duch      -> gdy pudełko powtarza wspomnienie, iskierka rozbłyska i
-//                unosi się na chwilę
-//   machanie  -> snop iskier przy każdym dzwonku
-//   tło       -> pulsujące pagórki na horyzoncie (akord tampury)
-//   pogoda    -> gwiazdy mrugają w rytmie oddechu, ziemia jaśnieje z dźwiękiem
-//   przechył  -> księżyc wędruje po niebie (jasność brzmienia = jasność nieba)
+// The shared metaphor:
+//   note      -> a being appears at the pitch's position, alive while it rings
+//   note ends -> it settles into the ground as a dim seed (the ghost
+//                garden's memory, finally VISIBLE)
+//   ghost     -> when the box replays a memory, its seed flares
+//   shake     -> a burst of sparks with every chime
+//   background-> pulsing shapes tied to the tampura chord
+//   weather   -> stars twinkle with the breath, the ground brightens with sound
+//   tilt      -> TWO axes: sideways = brightness (the moon wanders / the
+//                system spins), toward/away = depth (orbits flatten, light
+//                shafts lean, the mandala changes symmetry)
 //
-// Rysuje pełną klatkę przy każdym wywołaniu — wołać z draw() trybu przy
-// ciągłym markDirty(); main i tak ogranicza do ~25 fps.
+// Draws a full frame per call — call from the mode's draw() with a constant
+// markDirty(); main caps it at ~25 fps anyway.
 #pragma once
 #include <M5GFX.h>
 

@@ -1,6 +1,7 @@
 // Mode interface. A mode gets the shared core (engine + canvas) and changes
 // only the input mapping and the sound character — adding a new mode is one
-// class plus an entry in the modes[] table in main.cpp.
+// class plus a branch in main.cpp (a short GO press toggles playing <->
+// settings; there is no menu and no modes[] table).
 #pragma once
 #include <M5GFX.h>
 
@@ -21,8 +22,8 @@ class Mode {
   virtual void onKey(ModeCtx&, int col, int row, bool down) {
     (void)col; (void)row; (void)down;
   }
-  // przytrzymany GO (krótki GO = powrót do menu, obsługuje main.cpp);
-  // powtarza się co ~0.7 s, póki przycisk trzymany
+  // held GO (a short GO press toggles playing <-> settings in main.cpp);
+  // repeats every ~0.7 s while the button stays down
   virtual void onGoHold(ModeCtx&) {}
   virtual void tick(ModeCtx&, float dt) { (void)dt; }
   virtual void draw(ModeCtx&) = 0;
