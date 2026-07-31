@@ -3,8 +3,7 @@
 A pocket instrument that **cannot be played badly** — built by a dad for his
 kid, on an **M5Stack Cardputer-ADV** (ESP32-S3, ~$60 off the shelf).
 
-▶️ **[60-second demo](media/demo.mp4)** — a box that used to run Meshtastic,
-reborn as a night meadow with fireflies.
+https://github.com/user-attachments/assets/ff5505d3-2069-4a1e-8fab-654272a3c69c
 
 You shake it, tilt it, click it, sing into it — and something beautiful
 comes out. Under the toy there is a serious synthesis engine: just
