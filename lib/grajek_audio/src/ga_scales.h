@@ -23,7 +23,15 @@ namespace ga {
 constexpr int kGridCols = 14;
 constexpr int kGridRows = 4;
 
-enum class ScaleId : uint8_t { EDO12, EDO19, EDO31, JI11, PENTA, MAJOR, Count };
+enum class ScaleId : uint8_t {
+  EDO12, EDO19, EDO31, JI11, PENTA, MAJOR,
+  // WOLF — the anti-scale, hiding at the strange end of the settings list:
+  // 62 c column steps, 637 c rows; the only "fifth" in the grid is the
+  // historically correct, howling 682 c wolf. Nothing is pure. Born from
+  // a forum dare: "can you make one that is always dissonant though?"
+  WOLF,
+  Count
+};
 
 struct ScaleInfo {
   const char* name;   // short name for the LCD

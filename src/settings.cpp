@@ -13,10 +13,12 @@ const char* kPresetNames[ga::kNumTimbrePresets] = {"PURE", "DRONE", "REED",
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 
 // kolejność odkrywania: od skal, w których nic nie zabrzmi źle, do coraz
-// dziwniejszych — maluch zatrzyma się na początku, starszak dojdzie do końca
+// dziwniejszych — maluch zatrzyma się na początku, starszak dojdzie do
+// końca, a na samym końcu czeka WILK, w którym nic nie brzmi czysto
 const ga::ScaleId kScaleOrder[(int)ga::ScaleId::Count] = {
     ga::ScaleId::PENTA, ga::ScaleId::MAJOR, ga::ScaleId::EDO12,
     ga::ScaleId::EDO19, ga::ScaleId::EDO31, ga::ScaleId::JI11,
+    ga::ScaleId::WOLF,
 };
 
 int s_scaleIdx = 0;  // indeks w kScaleOrder (PENTA)

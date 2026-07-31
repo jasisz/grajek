@@ -38,7 +38,8 @@ float registerLift(ScaleId s) {
   switch (s) {
     case ScaleId::EDO12:
     case ScaleId::EDO19:
-    case ScaleId::EDO31: return 1200.0f;
+    case ScaleId::EDO31:
+    case ScaleId::WOLF:  return 1200.0f;  // WOLF's rows are narrow too
     default:             return 0.0f;
   }
 }
@@ -65,6 +66,7 @@ const ScaleInfo& scaleInfo(ScaleId s) {
       {"JI 11-limit", "14 ratios/octave, row = +octave"},
       {"PENTA JI", "major pentatonic, row = +2 steps (thirds)"},
       {"MAJOR JI", "just major, row = +2 steps (thirds)"},
+      {"WOLF", "62 c steps, row = +637 c - nothing is pure"},
   };
   int i = (int)s;
   if (i < 0 || i >= (int)ScaleId::Count) i = 0;
@@ -79,6 +81,7 @@ int scaleStepsPerOctave(ScaleId s) {
     case ScaleId::JI11:  return kGridCols;
     case ScaleId::PENTA: return 5;
     case ScaleId::MAJOR: return 7;
+    case ScaleId::WOLF:  return 19;  // ~1200/62, close enough for the ladder
     default:             return 12;
   }
 }
@@ -95,6 +98,7 @@ float scaleStepCents(ScaleId s, int step) {
              1200.0f * (float)(step / kGridCols);
     case ScaleId::PENTA: return stepTable(kPenta, 5, step);
     case ScaleId::MAJOR: return stepTable(kMajor, 7, step);
+    case ScaleId::WOLF:  return lift + (float)step * 62.0f;
     default:             return (float)step * 100.0f;
   }
 }
@@ -110,6 +114,11 @@ float gridToCents(ScaleId s, int col, int row) {
     case ScaleId::JI11:  return ji11Cents()[col] + (float)row * 1200.0f;
     case ScaleId::PENTA: return stepTable(kPenta, 5, col + row * 2);
     case ScaleId::MAJOR: return stepTable(kMajor, 7, col + row * 2);
+    // WOLF: quarter-tone-ish clusters, rows a sour near-tritone apart;
+    // no column pair lands near a pure octave, and "the fifth" (col
+    // diff 11) is the 682 c wolf that gave meantone tuners nightmares
+    case ScaleId::WOLF:
+      return lift + (float)col * 62.0f + (float)row * 637.0f;
     default:             return (float)col * 100.0f;
   }
 }
