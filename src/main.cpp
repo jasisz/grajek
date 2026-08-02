@@ -9,12 +9,12 @@
 #include "ambient.h"
 #include "firefly.h"
 #include "ga_engine.h"
+#include "goodnight.h"
 #include "hal/audio_out.h"
 #include "input/keys.h"
 #include "modes/mode.h"
 #include "modes/mode_instrument.h"
 #include "modes/mode_settings.h"
-#include "modes/mode_sing.h"
 #include "pulse.h"
 #include "settings.h"
 #include "soul.h"
@@ -31,10 +31,8 @@ M5Canvas canvas;
 
 // Bez menu: pudełko albo GRA, albo pokazuje USTAWIENIA. Krótkie GO
 // przełącza między tymi dwoma światami, przytrzymane (podczas grania)
-// zmienia barwę. Granie to INSTRUMENT, a z otwartym uchem — ŚPIEW
-// (przełącznik „6 ucho" w ustawieniach).
+// zmienia barwę. Granie to zawsze INSTRUMENT.
 ModeInstrument modeInstrument;
-ModeSing modeSing;
 ModeSettings modeSettings;
 
 Mode* current = nullptr;
@@ -42,6 +40,7 @@ bool inSettings = false;
 bool audioOk = false;
 bool displayOk = false;  // M5GFX autodetect can fail — never draw blind:
                          // pushSprite on a panel-less display hard-crashes
+bool displaySleeping = false;
 uint32_t lastFrameMs = 0;
 uint32_t lastTickMs = 0;
 
@@ -51,30 +50,27 @@ bool goLongUsed = false;
 uint32_t goNextActionMs = 600;
 
 void switchTo(ModeCtx& ctx, Mode* next) {
+  const bool refreshBackground = current != nullptr;
   if (current) {
-    current->exit(ctx);
     engine.allNotesOff();
-    ambient::backgroundRefresh();  // czystka nie może zabijać tampury
+    current->exit(ctx);
   }
   current = next;
   Serial.printf("grajek: -> %s\n", next->name());
   next->enter(ctx);
-}
-
-// granie: INSTRUMENT albo ŚPIEW, wedle przełącznika w ustawieniach
-Mode* playMode() {
-  return settings::singOn() ? (Mode*)&modeSing : (Mode*)&modeInstrument;
+  // ModeSettings::enter may write NVS. Keep the gap between all-notes-off
+  // and this refresh truly quiet so flash-cache stalls cannot scratch a live
+  // drone. During goodnight backgroundRefresh deliberately remains a no-op.
+  if (refreshBackground) ambient::backgroundRefresh();
 }
 
 }  // namespace
 
 void setup() {
-  Serial.begin(115200);  // our diagnostics were silently dropped without it
+  Serial.begin(115200);
   auto cfg = M5.config();
   cfg.internal_spk = false;  // we drive the codec ourselves (low latency)
-  cfg.internal_mic = true;   // configures M5.Mic pins + the ES8311 ADC
-                             // callback; nothing starts until a listening
-                             // window borrows the bus (see audio_out.h)
+  cfg.internal_mic = false;  // this instrument never listens
   cfg.internal_imu = true;
   M5Cardputer.begin(cfg, true);
   // Diagnose the display before touching it: if the M5GFX autodetect did
@@ -100,9 +96,7 @@ void setup() {
     }
   }
 
-  // Synth at 48 kHz; the ear runs its listening windows at 16 kHz on the
-  // factory M5.Mic path (the full-duplex experiments are over — one bus,
-  // one master; see audio_out.h).
+  // Synth at 48 kHz.
   engine.init(48000.0f);
   engine.setParam(ga::Param::FilterCutoffHz, 7500.0f);
 
@@ -127,7 +121,7 @@ void setup() {
   // pudełko budzi się GRAJĄCE — ustawienia mieszkają pod GO
   firefly::hello();  // jeden ciepły błysk: żyję (i tu mieszka świetlik)
   ModeCtx bootCtx{engine, canvas};
-  switchTo(bootCtx, playMode());
+  switchTo(bootCtx, &modeInstrument);
 
   lastTickMs = millis();
 }
@@ -138,36 +132,6 @@ void loop() {
   const float dt = (float)(now - lastTickMs) / 1000.0f;
   lastTickMs = now;
 
-  // diagnostyka po serialu: pojedyncze znaki sterują kodekiem (patrz
-  // hal::audioDiag), a linia "Wrrvv" (hex) pisze dowolny rejestr ES8311 —
-  // pozwala bisektować konfigurację bez flashowania
-  {
-    static char line[8];
-    static int len = 0;
-    while (Serial.available() > 0) {
-      const char c = (char)Serial.read();
-      if (c == '\n' || c == '\r') {
-        if (len == 1) {
-          if (line[0] == 'f') firefly::selfTest();
-          else hal::audioDiag(line[0]);
-        } else if (len == 5 && (line[0] == 'W' || line[0] == 'w')) {
-          const long rv = strtol(line + 1, nullptr, 16);  // "rrvv" hex
-          hal::audioDiagWrite((uint8_t)((rv >> 8) & 0xFF), (uint8_t)(rv & 0xFF));
-        }
-        len = 0;
-      } else if (len < 7) {
-        line[len++] = c;
-        line[len] = 0;
-      }
-    }
-  }
-  // telemetria ucha przy diagnostyce 'e' (poza trybem ŚPIEW, który loguje sam)
-  static uint32_t lastDiagMs = 0;
-  if (!settings::singOn() && hal::earIsOpen() && now - lastDiagMs > 1000) {
-    lastDiagMs = now;
-    Serial.printf("grajek: poziom=%.4f\n", hal::earLevel());
-  }
-
   // UWAGA: bez M5Cardputer.update() — klawiaturę czytamy sami w keysPoll
   // (polling FIFO TCA8418; czytnik biblioteki na przerwaniu potrafił się
   // zakleszczyć i zamrażał klawiaturę), a update() podkradałby zdarzenia
@@ -175,19 +139,32 @@ void loop() {
   const int n = input::keysPoll(ev, input::kMaxKeyEvents);
   ModeCtx ctx{engine, canvas};
 
+  // Physical state is global even when a mode switch intentionally suppresses
+  // the musical meaning of events from this pass.
+  for (int i = 0; i < n; ++i) {
+    ambient::keyState(ev[i].row * 14 + ev[i].col, ev[i].down);
+    if (ev[i].down) goodnight::wakeFromKey();
+  }
+  if (input::goPressed()) goodnight::wakeFromKey();
+
   // GO: przytrzymanie PODCZAS GRANIA = następna barwa (powtarzane),
   // krótkie puszczenie = przeskok granie <-> ustawienia
   bool justSwitched = false;
   if (!inSettings && input::goHeldMs() >= goNextActionMs) {
+    goodnight::wakeFromKey();
     current->onGoHold(ctx);
     goNextActionMs += 700;
     goLongUsed = true;
   }
   if (input::goReleased()) {
+    goodnight::wakeFromKey();  // the side button is a physical key too
     if (!goLongUsed) {
       inSettings = !inSettings;
-      switchTo(ctx, inSettings ? (Mode*)&modeSettings : playMode());
+      switchTo(ctx, inSettings ? (Mode*)&modeSettings
+                               : (Mode*)&modeInstrument);
       justSwitched = true;  // klawisz-cyfra z tego przebiegu nie zagra nuty
+    } else {
+      settings::save();  // persist only the final preset reached by the hold
     }
     goLongUsed = false;
     goNextActionMs = 600;
@@ -198,7 +175,29 @@ void loop() {
       current->onKey(ctx, ev[i].col, ev[i].row, ev[i].down);
   current->tick(ctx, dt);
 
-  if (displayOk && current->dirty() && now - lastFrameMs >= 40) {  // ~25 fps
+  // Face-down means bedtime, so put the hidden LCD controller and backlight to
+  // sleep as soon as the lullaby begins. The CPU, keyboard and IMU stay awake
+  // so lifting the box or touching any key is an instant, reliable alarm clock.
+  bool displayJustWoke = false;
+  if (displayOk) {
+    const bool shouldSleep = ambient::lullabyActive();
+    if (shouldSleep && !displaySleeping) {
+      firefly::setSleeping(true);
+      M5Cardputer.Display.sleep();
+      displaySleeping = true;
+      Serial.println("grajek: drzemka — ekran zgaszony");
+    } else if (!shouldSleep && displaySleeping) {
+      M5Cardputer.Display.wakeup();
+      firefly::setSleeping(false);
+      displaySleeping = false;
+      displayJustWoke = true;
+      Serial.println("grajek: pobudka — ekran wlaczony");
+    }
+  }
+
+  if (displayOk && !displaySleeping &&
+      (current->dirty() || displayJustWoke) &&
+      now - lastFrameMs >= 40) {  // ~25 fps
     current->draw(ctx);
     canvas.pushSprite(&M5Cardputer.Display, 0, 0);
     current->clearDirty();

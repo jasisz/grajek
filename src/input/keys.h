@@ -14,8 +14,8 @@ struct KeyEvent {
   bool down;
 };
 
-// Enough for every key changing at once — poll with this size and event
-// overflow is physically impossible.
+// Enough to synthesize releases for every held key if the TCA8418's own
+// 10-entry hardware FIFO overflows during a blocking operation.
 constexpr int kMaxKeyEvents = 56;
 
 void keysInit();
@@ -27,6 +27,7 @@ int keysPoll(KeyEvent* out, int maxEvents);
 
 // BtnGO (G0), debounced. Sampled by keysPoll() — the edge stays valid for
 // one loop pass (main calls keysPoll once per pass).
+bool goPressed();   // true exactly once, on press
 bool goReleased();  // true exactly once, on release
 
 // ile ms GO jest trzymany (0 gdy puszczony) — przytrzymanie = akcja trybu

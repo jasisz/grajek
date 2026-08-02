@@ -6,9 +6,9 @@
 // w settings (ekran USTAWIEŃ w menu); przytrzymany GO zmienia barwę w locie.
 //
 // Gesty:
-//   MACHANIE  — wiatr wspomnień: każdy zamach wyrywa z ogrodu nutkę, którą
-//               dziecko naprawdę zagrało (czasem oktawę wyżej); siła zamachu
-//               = głośność. Klawisze robią nowe nuty, ruch gra stare — nie
+//   MACHANIE  — wiatr wspomnień: każdy zamach wyrywa z ogrodu krótką frazę
+//               z rytmem dziecka (czasem całą przenosi); siła zamachu =
+//               głośność. Klawisze robią nowe frazy, ruch gra stare — nie
 //               konkurują. Pusty ogród: zapasowa drabinka skali.
 //   PRZECHYŁ  — na boki: jasność brzmienia (filtr); do/od siebie: głębia
 //               przestrzeni (pogłos+echo). Oba wygładzone (~0.4 s), stałe,
@@ -31,16 +31,13 @@ class ModeInstrument : public Mode {
   void tick(ModeCtx&, float dt) override;
   void draw(ModeCtx&) override;
 
-  // when the wind of memories last chimed — SPIEW keeps the ear closed
-  // until the rattle rings out
-  static uint32_t lastChimeMs();
-
  private:
   void imuStep(ModeCtx&);
   void triggerChime(ModeCtx&, float energy, float dir);
+  void playChimeNote(ModeCtx&, float cents, float velocity);
+  void windPhraseStep(ModeCtx&, uint32_t nowMs);
+  void windPhraseCancel(ModeCtx&);
 
   // Gesture state (gravity filter, tilts, chime ladder) lives as file-scope
-  // statics in mode_instrument.cpp, NOT here: INSTRUMENT and SPIEW are two
-  // objects but one physical instrument — switching between them must not
-  // reset the smoothed gravity and make the sound jump.
+  // statics in mode_instrument.cpp so a settings visit does not reset it.
 };

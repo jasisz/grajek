@@ -15,6 +15,7 @@ uint32_t s_lastTickMs = 0;
 uint32_t s_lastWriteMs = 0;
 uint8_t s_wr = 0, s_wg = 0, s_wb = 0;  // last written value (skip no-ops)
 bool s_dark = true;
+bool s_sleeping = false;
 
 // battery dusk: cached level, sampled rarely (ADC + math are not free)
 float s_dusk = 1.0f;
@@ -65,6 +66,7 @@ void note(float cents, float vel) {
 }
 
 void ghost(float cents) {
+  if (s_sleeping) return;  // bedtime memories sing, but do not relight the rail
   float r, g, b;
   pitchColor(cents, r, g, b);
   s_r = r * 0.45f;
@@ -84,36 +86,8 @@ void hello() {
   s_dark = false;
 }
 
-void selfTest() {
-  // serial diag 'f': R, G, B, W at two backlight levels — proves the LED
-  // exists and where it shines. ADV gotcha (docs): the WS2812's power
-  // rail sits behind an electronic switch driven by G38 — the SAME pin
-  // M5GFX PWMs as the display backlight. At brightness 160 the LED's
-  // supply is chopped; phase 2 runs at 255 (G38 solid high) to tell a
-  // dead LED from a starved one. Blocking (~4 s), diagnostics only.
-  static constexpr uint8_t seq[4][3] = {
-      {180, 0, 0}, {0, 180, 0}, {0, 0, 180}, {150, 150, 150}};
-  const uint8_t bright = M5.Display.getBrightness();
-  Serial.println("grajek: diag swietlik R/G/B/W przy zwyklym podswietleniu...");
-  for (auto& c : seq) {
-    rgbLedWrite((uint8_t)hal::kPinRgbLed, c[0], c[1], c[2]);
-    delay(500);
-  }
-  Serial.println("grajek: ...i przy pelnym (G38 = zasilanie diody!)");
-  M5.Display.setBrightness(255);
-  delay(50);
-  for (auto& c : seq) {
-    rgbLedWrite((uint8_t)hal::kPinRgbLed, c[0], c[1], c[2]);
-    delay(500);
-  }
-  rgbLedWrite((uint8_t)hal::kPinRgbLed, 0, 0, 0);
-  M5.Display.setBrightness(bright);
-  s_wr = s_wg = s_wb = 0;
-  s_dark = true;
-  Serial.println("grajek: diag swietlik koniec (widziales 1. czy 2. serie?)");
-}
-
 void tick() {
+  if (s_sleeping) return;
   const uint32_t now = millis();
   if (now - s_lastTickMs < 20) return;  // ~50 Hz is plenty for one LED
   const float dt = (float)(now - s_lastTickMs) * 0.001f;
@@ -138,6 +112,23 @@ void tick() {
     s_dark = true;
   }
   show(1.0f);
+}
+
+void setSleeping(bool sleeping) {
+  if (sleeping == s_sleeping) return;
+  if (sleeping) {
+    // Write black while G38 still powers the WS2812; once Display.sleep()
+    // drops that shared rail there is no chance to deliver another command.
+    rgbLedWrite((uint8_t)hal::kPinRgbLed, 0, 0, 0);
+    s_r = s_g = s_b = 0.0f;
+    s_wr = s_wg = s_wb = 0;
+    s_dark = true;
+  } else {
+    // Do not charge the first waking decay with the whole time spent asleep:
+    // a key may already have planted its flash before main wakes the display.
+    s_lastTickMs = millis();
+  }
+  s_sleeping = sleeping;
 }
 
 }  // namespace firefly

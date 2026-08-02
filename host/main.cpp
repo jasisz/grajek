@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <algorithm>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
@@ -20,6 +21,7 @@ namespace {
 
 constexpr int kSr = 48000;
 constexpr int kBlock = 128;
+bool g_renderOk = true;
 
 struct Cue {
   double t;
@@ -75,6 +77,7 @@ void renderSong(const std::string& path, double seconds, Engine& e,
   }
   if (!writeWavMono16(path.c_str(), pcm.data(), pcm.size(), kSr)) {
     fprintf(stderr, "ERROR: cannot write %s\n", path.c_str());
+    g_renderOk = false;
     return;
   }
   const double rms = sqrt(sumSq / (double)total);
@@ -169,6 +172,12 @@ void printGridTables() {
 
 int main(int argc, char** argv) {
   const std::string dir = argc > 1 ? argv[1] : "out";
+  std::error_code dirError;
+  std::filesystem::create_directories(dir, dirError);
+  if (dirError || !std::filesystem::is_directory(dir)) {
+    fprintf(stderr, "ERROR: cannot create output directory %s\n", dir.c_str());
+    return 1;
+  }
   printf("grajek_host — engine at %d Hz, %d-sample blocks\n", kSr, kBlock);
   printf("Rendering into: %s/\n\n", dir.c_str());
   demoSingleNote(dir);
@@ -176,5 +185,5 @@ int main(int argc, char** argv) {
   demoDrone(dir);
   printGridTables();
   printf("\nListen:  afplay %s/01_single_note.wav\n", dir.c_str());
-  return 0;
+  return g_renderOk ? 0 : 1;
 }

@@ -100,15 +100,8 @@ Meteor s_meteor = {false, 0, 0, 0, 0, 0};
 
 float s_tilt = 0.0f;   // boczny (jasność)
 float s_depth = 0.0f;  // do/od siebie (przestrzeń)
-bool s_listening = false;
-float s_voiceLvl = 0.0f;
 int s_scene = 0;
 
-// kometa głosu: gaśnie sama, gdy duet przestaje ją odświeżać
-float s_voiceCents = 0.0f, s_voiceGlow = 0.0f;
-uint32_t s_voiceMs = 0;
-float s_voiceTrail[4];  // ostatnie pozycje X dla warkocza
-int s_voiceTrailN = 0;
 char s_toast[24] = {0};
 float s_toastT = 0.0f;
 uint32_t s_lastMs = 0;
@@ -149,14 +142,9 @@ void reset() {
   s_seedHead = 0;
   s_tilt = 0.0f;
   s_depth = 0.0f;
-  s_voiceLvl = 0.0f;
-  s_voiceGlow = 0.0f;
-  s_voiceMs = 0;
-  s_voiceTrailN = 0;
   s_toastT = 0.0f;
   s_lastMs = millis();
   s_meteor.active = false;
-  s_listening = false;
   // the audio garden is the source of truth and survives mode switches —
   // replant its memories as seeds, so a peek into the settings screen no
   // longer burns the meadow (call setPitchRange BEFORE reset: seed X
@@ -236,18 +224,6 @@ void ghost(float cents) {
 void setTilt(float norm) { s_tilt = norm; }
 
 void setDepth(float norm) { s_depth = norm; }
-
-void voice(float cents, float lvl) {
-  s_voiceCents = cents;
-  s_voiceGlow = lvl < 0.25f ? 0.25f : (lvl > 1.0f ? 1.0f : lvl);
-  s_voiceMs = millis();
-}
-
-void setListening(bool on) { s_listening = on; }
-
-void setVoiceLevel(float lvl) {
-  s_voiceLvl = lvl < 0.0f ? 0.0f : (lvl > 1.0f ? 1.0f : lvl);
-}
 
 void toast(const char* text) {
   if (!text) return;
@@ -719,37 +695,6 @@ void draw(M5Canvas& g) {
     case 2: drawOcean(g, fr); break;
     case 3: drawOgnie(g, fr); break;
     default: drawMandala(g, fr); break;
-  }
-
-  // kometa głosu: chłodny błękit (kontrast z ciepłymi świetlikami),
-  // leci na wysokości śpiewu z krótkim warkoczem, gaśnie po ~0.4 s ciszy
-  if (s_voiceMs != 0 && now - s_voiceMs < 400) {
-    const float k = s_voiceGlow * (1.0f - (float)(now - s_voiceMs) / 400.0f);
-    const int vx = xFromCents(s_voiceCents);
-    const int vy = yFromCents(s_voiceCents);
-    if (s_voiceTrailN == 0 || fabsf(s_voiceTrail[0] - (float)vx) > 1.5f) {
-      for (int i = 3; i > 0; --i) s_voiceTrail[i] = s_voiceTrail[i - 1];
-      s_voiceTrail[0] = (float)vx;
-      if (s_voiceTrailN < 4) ++s_voiceTrailN;
-    }
-    for (int i = 1; i < s_voiceTrailN; ++i)
-      g.drawPixel((int)s_voiceTrail[i], vy,
-                  shade(150, 200, 255, k * (1.0f - 0.25f * i)));
-    g.fillCircle(vx, vy, 2 + (int)(3.0f * k), shade(120, 180, 255, 0.4f * k));
-    g.fillCircle(vx, vy, 1 + (int)(1.5f * k), shade(200, 230, 255, k));
-  } else {
-    s_voiceTrailN = 0;
-  }
-
-  // ucho otwarte: pulsujący pierścień w lewym górnym rogu; rośnie i
-  // jaśnieje z głosem — "pudełko mnie słyszy" widać od razu
-  if (s_listening) {
-    const float p = 0.5f + 0.5f * sinf(t * 1.2f * 6.2832f);
-    const int r = 5 + (int)(2.0f * p + 8.0f * s_voiceLvl);
-    g.drawCircle(14, 14, r,
-                 shade(255, 150, 90, 0.5f + 0.4f * p + 0.3f * s_voiceLvl));
-    g.fillCircle(14, 14, 2 + (int)(2.0f * s_voiceLvl),
-                 shade(255, 190, 120, 0.9f));
   }
 
   // toast: jedyny tekst na scenie, znika sam

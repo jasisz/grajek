@@ -1,7 +1,7 @@
-// The soul: what the box keeps overnight — the memory garden (the notes
-// the child really played), a hand-picked background chord, and the last
-// stable pulse period. Saved to NVS at natural pauses (entering settings,
-// the goodnight ritual), restored at boot; a few seconds after waking the
+// The soul: what the box keeps overnight — the memory garden (short phrases
+// with the child's pitches and timing), the last stable pulse, and an optional
+// custom background supplied by alternate controllers. Saved atomically at
+// pauses (five quiet seconds, settings, goodnight), restored at boot; then the
 // box greets you with ONE remembered note. Design law no. 5 made real on
 // the device, not just the host.
 #pragma once
@@ -9,6 +9,6 @@
 namespace soul {
 
 void load();  // call once in setup, after settings are applied
-void save();  // cheap when nothing changed (fingerprint check)
+bool save();  // true on success/no-op; false lets deferred callers retry
 
 }  // namespace soul

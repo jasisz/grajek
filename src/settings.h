@@ -12,6 +12,7 @@
 namespace settings {
 
 void load();  // raz w setup(), przed applyToEngine
+bool save();  // zapisuje tylko pola zmienione od ostatniego zapisu/odczytu
 
 ga::ScaleId scale();
 int preset();        // indeks barwy (kNumTimbrePresets)
@@ -19,17 +20,16 @@ int octave();        // indeks do {55, 110, 220, 440} Hz
 float baseHz();      // częstotliwość centrum wynikająca z oktawy
 bool backgroundOn();
 int vizScene();      // scena wizualizacji (viz::kSceneCount)
-bool singOn();       // tryb ŚPIEW: ucho otwarte podczas grania
 
 const char* presetName(int idx);
 
-// zmiany cykliczne; każda od razu zapisuje się w NVS
+// Zmiany cykliczne są natychmiastowe w RAM; NVS dostaje końcowy wybór przy
+// wyjściu z ustawień / puszczeniu długiego GO, nie każdy krok karuzeli.
 void cycleScale();
 void cyclePreset();
 void cycleOctave();
 void toggleBackground();
 void cycleVizScene();
-void toggleSing();
 
 // wciska aktualny stan w silnik + struny + ambient (po zmianie i na starcie)
 void applyToEngine(ga::Engine& e);

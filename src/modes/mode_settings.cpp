@@ -1,19 +1,31 @@
 #include "mode_settings.h"
 
+#include <M5Unified.h>
 #include <stdio.h>
 
+#include "../ambient.h"
+#include "../firefly.h"
+#include "../goodnight.h"
 #include "../settings.h"
 #include "../soul.h"
 #include "../viz.h"
 #include "ga_scales.h"
 
 void ModeSettings::enter(ModeCtx&) {
-  soul::save();  // a natural pause — remember the garden, the chord, the pulse
+  // A normal settings visit is a natural pause. During goodnight, NVS must
+  // wait for ambient's scheduled save in real silence.
+  if (!ambient::lullabyActive()) soul::save();
+  imuTimer_ = 0.0f;
   markDirty();
 }
 
+void ModeSettings::exit(ModeCtx&) { settings::save(); }
+
 void ModeSettings::onKey(ModeCtx& ctx, int col, int row, bool down) {
-  if (!down || row != 0) return;  // cyfry mieszkają w górnym rzędzie
+  if (!down) return;
+  // Any physical key is an explicit wake-up even on the settings screen.
+  // It is not musical presence: restored phrases must still wait for play.
+  if (row != 0) return;  // cyfry mieszkają w górnym rzędzie
   switch (col) {
     case 1: settings::cycleScale(); break;
     case 2:
@@ -26,10 +38,35 @@ void ModeSettings::onKey(ModeCtx& ctx, int col, int row, bool down) {
       break;
     case 4: settings::toggleBackground(); break;
     case 5: settings::cycleVizScene(); break;
-    case 6: settings::toggleSing(); break;
     default: return;
   }
   markDirty();
+}
+
+void ModeSettings::tick(ModeCtx&, float dt) {
+  const uint32_t nowMs = millis();
+  float ghostSource = 0.0f, ghostPlayed = 0.0f;
+  if (ambient::pollGhost(&ghostSource, &ghostPlayed))
+    firefly::ghost(ghostPlayed);  // drain the event outside the play scenes
+
+  constexpr float kImuPeriod = 0.02f;
+  imuTimer_ += dt;
+  if (imuTimer_ < kImuPeriod) return;
+  imuTimer_ -= kImuPeriod;
+  if (imuTimer_ > kImuPeriod) imuTimer_ = 0.0f;
+
+  float ax = 0.0f, ay = 0.0f, az = 0.0f;
+  M5.Imu.update();
+  M5.Imu.getAccel(&ax, &ay, &az);
+  const bool wasSleeping = ambient::lullabyActive();
+  goodnight::sample(nowMs, az);
+  if (!wasSleeping && ambient::lullabyActive()) {
+    // The first lullaby note waits 1.2 s, so this is a natural silent point
+    // to persist settings even if the box is powered off without leaving the
+    // settings screen. A failed write remains dirty and ambient retries it
+    // after the lullaby reaches complete silence.
+    settings::save();
+  }
 }
 
 void ModeSettings::draw(ModeCtx& ctx) {
@@ -46,19 +83,18 @@ void ModeSettings::draw(ModeCtx& ctx) {
 
   // krótkie etykiety: przy rozmiarze 2 kolumna wartości startuje na 100 px,
   // a najdłuższa nazwa skali ("JI 11-limit") kończy się dokładnie w kadrze
-  const char* labels[6] = {"1 skala", "2 barwa", "3 okt.",
-                           "4 tlo",   "5 scena", "6 ucho"};
-  const char* values[6];
+  const char* labels[5] = {"1 skala", "2 barwa", "3 okt.", "4 tlo",
+                           "5 scena"};
+  const char* values[5];
   values[0] = ga::scaleInfo(settings::scale()).name;
   values[1] = settings::presetName(settings::preset());
   snprintf(buf, sizeof buf, "%d Hz", (int)settings::baseHz());
   values[2] = buf;
   values[3] = settings::backgroundOn() ? "gra" : "cicho";
   values[4] = viz::sceneName(settings::vizScene());
-  values[5] = settings::singOn() ? "sluchaj" : "nie";
 
   g.setTextSize(2);
-  for (int i = 0; i < 6; ++i) {
+  for (int i = 0; i < 5; ++i) {
     const int y = 26 + i * 17;
     g.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
     g.drawString(labels[i], 6, y);

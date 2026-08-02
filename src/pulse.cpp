@@ -13,9 +13,19 @@ constexpr int32_t kPulseId = 1300;    // outside grid/background/ghosts/chimes
 constexpr int kMusicboxPreset = 4;    // the heart always beats MUSICBOX
 
 // Double on purpose: per-onset and per-beat math only (no audio-rate cost),
-// and float seconds lose millisecond precision after ~2 hours of uptime —
-// a toy left on all afternoon would drift.
-double nowSec() { return (double)millis() * 0.001; }
+// and float seconds lose millisecond precision after ~2 hours of uptime.
+// Extend millis() so the beat clock never jumps backwards at 49.7 days.
+uint64_t s_clockHighMs = 0;
+uint32_t s_clockLastMs = 0;
+bool s_clockStarted = false;
+
+double extendedNowSec() {
+  const uint32_t ms = millis();
+  if (s_clockStarted && ms < s_clockLastMs) s_clockHighMs += 1ull << 32;
+  s_clockStarted = true;
+  s_clockLastMs = ms;
+  return (double)(s_clockHighMs + ms) * 0.001;
+}
 
 struct Pulse {
   double onsets[8];
@@ -38,13 +48,15 @@ namespace pulse {
 
 void init(ga::Engine* engine) { s_engine = engine; }
 
+double nowSec() { return extendedNowSec(); }
+
 bool ticking() { return s_pulse.ticking; }
 double memoryPeriodSec() { return s_pulse.memory; }
 double lastOnsetSec() { return s_pulse.lastOnset; }
 void restoreMemory(double periodSec) { s_pulse.memory = periodSec; }
 
 void onOnset() {
-  const double t = nowSec();
+  const double t = extendedNowSec();
   Pulse& p = s_pulse;
   const double d = p.lastOnset > 0.0 ? t - p.lastOnset : 0.0;
   if (p.count < 8) {
@@ -113,8 +125,21 @@ void onOnset() {
 
 void tick() {
   Pulse& p = s_pulse;
-  if (!p.ticking || !s_engine) return;
-  const double now = nowSec();
+  const double now = extendedNowSec();  // maintain the high word every pass
+  if (!s_engine) return;
+  if (ambient::lullabyActive()) {
+    // Goodnight owns the whole box. A fresh rhythm will summon the heart
+    // after waking; even a half-learned pre-sleep rhythm must not combine
+    // with tomorrow's first presses.
+    if (p.ticking) s_engine->noteOff(kPulseId);
+    p.ticking = false;
+    p.count = 0;
+    p.beatsAlone = 0;
+    p.beatsPlayed = 0;
+    p.step = 0;
+    return;
+  }
+  if (!p.ticking) return;
   if (now < p.nextBeatAt) return;
   if (now - p.lastOnset > p.period * 1.5) ++p.beatsAlone;
   const float fade = 1.0f - (float)p.beatsAlone / 6.0f;

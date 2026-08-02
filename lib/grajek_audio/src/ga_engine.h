@@ -23,6 +23,10 @@ class Engine {
 
   // --- control-thread API ---
   void noteOn(int32_t id, float cents, float vel = 1.0f);
+  // Long-lived ambience is protected from ordinary voice stealing. It can
+  // still be retriggered/off'd by id and is only stolen if every voice is
+  // persistent (an app-level configuration error).
+  void noteOnPersistent(int32_t id, float cents, float vel = 1.0f);
   void noteOff(int32_t id);
   void allNotesOff();
   void setParam(Param p, float v);

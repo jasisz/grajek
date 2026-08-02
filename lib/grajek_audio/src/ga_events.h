@@ -27,6 +27,7 @@ struct Event {
   int32_t id = 0;   // note identifier (e.g. key index)
   float a = 0.0f;   // NoteOn: cents; SetParam: value
   float b = 0.0f;   // NoteOn: velocity 0..1
+  bool persistent = false;  // NoteOn: steal only as a last resort
 };
 
 // Single producer (UI/input), single consumer (audio). N = power of two.

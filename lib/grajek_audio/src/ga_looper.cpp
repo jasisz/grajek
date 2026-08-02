@@ -14,6 +14,8 @@ void Looper::init(int16_t* mix, int16_t* layer, int16_t* undoStack,
   undoHead_ = 0;
   max_ = maxFrames;
   cmds_.store(0);
+  capSrc_.store(nullptr);
+  capLen_ = 0;
   state_.store(State::Empty);
   length_.store(0);
   pos_.store(0);
@@ -47,9 +49,12 @@ void Looper::commitLayer() {
 
 void Looper::applyCommands() {
   // FREEZE capture: an external tape crystallizes into the loop
-  const int16_t* cap = capSrc_.exchange(nullptr, std::memory_order_acquire);
+  const int16_t* cap = capSrc_.load(std::memory_order_acquire);
   if (cap) {
+    // Read the non-atomic companion while the published pointer still blocks
+    // another control-thread request, then release the slot for the producer.
     const uint32_t frames = capLen_;
+    capSrc_.store(nullptr, std::memory_order_release);
     const State cs = state_.load(std::memory_order_relaxed);
     if (cs == State::Empty && frames > 0 && frames <= max_) {
       memcpy(mix_, cap, frames * sizeof(int16_t));

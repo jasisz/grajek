@@ -30,6 +30,16 @@ void Engine::noteOn(int32_t id, float cents, float vel) {
   q_.push(e);
 }
 
+void Engine::noteOnPersistent(int32_t id, float cents, float vel) {
+  Event e;
+  e.type = Event::NoteOn;
+  e.id = id;
+  e.a = cents;
+  e.b = vel;
+  e.persistent = true;
+  q_.push(e);
+}
+
 void Engine::noteOff(int32_t id) {
   Event e;
   e.type = Event::NoteOff;
@@ -58,11 +68,18 @@ Voice* Engine::voiceForNewNote(int32_t id) {
   // 2) a free voice
   for (auto& v : voices_)
     if (!v.active()) return &v;
-  // 3) steal: oldest releasing voice, otherwise oldest overall
+  // 3) steal: ordinary releasing voices, then ordinary active voices. A
+  // persistent drone is the floor of the instrument, not the first victim
+  // merely because it has been sounding longest.
   Voice* best = nullptr;
   for (auto& v : voices_)
-    if (v.releasing() && (!best || v.age() < best->age())) best = &v;
+    if (v.releasing() && !v.persistent() &&
+        (!best || v.age() < best->age())) best = &v;
   if (best) return best;
+  for (auto& v : voices_)
+    if (!v.persistent() && (!best || v.age() < best->age())) best = &v;
+  if (best) return best;
+  // Defensive fallback: an application should never pin all ten voices.
   for (auto& v : voices_)
     if (!best || v.age() < best->age()) best = &v;
   return best;
@@ -95,7 +112,7 @@ void Engine::handle(const Event& e) {
       for (int k = 1; k < Timbre::kPartials; ++k) tl.gain[k] *= bright;
 
       v->noteOn(e.id, e.a, clampf(e.b * loud, 0.0f, 1.0f), tl,
-                sameId ? glideSec_ : 0.0f, ++ageCounter_);
+                sameId ? glideSec_ : 0.0f, ++ageCounter_, e.persistent);
       break;
     }
     case Event::NoteOff:

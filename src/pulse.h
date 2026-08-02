@@ -12,10 +12,12 @@ namespace pulse {
 void init(ga::Engine* engine);
 void onOnset();  // every real key-down (grid notes only)
 void tick();     // once per main-loop pass
+// Wrap-extended Arduino clock shared with phrase scheduling.
+double nowSec();
 
 bool ticking();
 // the ghost beat grid: last stable period (0 = never entrained) and the
-// time of the last onset, both in seconds of millis()
+// time of the last onset, both on the monotonic extended clock
 double memoryPeriodSec();
 double lastOnsetSec();
 // soul: yesterday's period comes back with the box (memory only — the

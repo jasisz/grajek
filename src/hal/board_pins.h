@@ -20,11 +20,10 @@
 
 namespace hal {
 
-// --- audio: ES8311 over I2S (ESP32-S3 = master) ---
-constexpr int kPinI2sBclk = 41;  // ES8311 SCLK (shared by DAC and ADC)
-constexpr int kPinI2sWs   = 43;  // ES8311 LRCK (shared)
+// --- audio playback: ES8311 over I2S (ESP32-S3 = master) ---
+constexpr int kPinI2sBclk = 41;  // ES8311 SCLK
+constexpr int kPinI2sWs   = 43;  // ES8311 LRCK
 constexpr int kPinI2sDout = 42;  // ESP32 -> ES8311 DSDIN (playback)
-constexpr int kPinI2sDin  = 46;  // ES8311 ASDOUT -> ESP32 (microphone)
 
 // --- internal I2C bus (codec + IMU + keyboard) ---
 constexpr int kPinI2cSda = 8;

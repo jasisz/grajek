@@ -67,6 +67,7 @@ void Voice::init(float sampleRate, uint32_t seed) {
   env_.init(sampleRate);
   rng_ = seed * 2654435761u + 1u;
   id_ = -1;
+  persistent_ = false;
   for (int k = 0; k < Timbre::kPartials; ++k) {
     phase_[k] = rng();  // random start phases — no phase-aligned clicks
     ratio_[k] = 1.0f;
@@ -76,11 +77,12 @@ void Voice::init(float sampleRate, uint32_t seed) {
 }
 
 void Voice::noteOn(int32_t id, float cents, float vel, const Timbre& t,
-                   float glideSec, uint32_t age) {
+                   float glideSec, uint32_t age, bool persistent) {
   const bool wasActive = env_.active();
   id_ = id;
   vel_ = clampf(vel, 0.0f, 1.0f);
   age_ = age;
+  persistent_ = persistent;
   for (int k = 0; k < Timbre::kPartials; ++k) {
     ratio_[k] = t.ratio[k];
     gain_[k] = t.gain[k];

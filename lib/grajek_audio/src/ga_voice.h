@@ -35,13 +35,14 @@ class Voice {
  public:
   void init(float sampleRate, uint32_t seed);
   void noteOn(int32_t id, float cents, float vel, const Timbre& t,
-              float glideSec, uint32_t age);
-  void noteOff() { env_.noteOff(); }
-  void kill() { env_.reset(); }
+              float glideSec, uint32_t age, bool persistent = false);
+  void noteOff() { env_.noteOff(); persistent_ = false; }
+  void kill() { env_.reset(); persistent_ = false; }
   bool active() const { return env_.active(); }
   bool releasing() const { return env_.releasing(); }
   int32_t id() const { return id_; }
   uint32_t age() const { return age_; }
+  bool persistent() const { return persistent_; }
   float currentCents() const { return cents_; }
 
   // Renders and ADDS into the mono buffer. bendRatio = global offset (IMU).
@@ -76,6 +77,7 @@ class Voice {
   float vel_ = 1.0f;
   int32_t id_ = -1;
   uint32_t age_ = 0;
+  bool persistent_ = false;
   uint32_t rng_ = 1;
 };
 

@@ -5,8 +5,7 @@
 // (a few seconds in internal RAM, possibly at a lower sample rate). The
 // looper records the input and ADDS loop playback into the output; it never
 // passes the input through — input monitoring is the caller's decision
-// (on the host the dry synth is already in the buffer; on the device a mic
-// pass-through could feed back into the speaker).
+// (on the host the dry synth is already in the buffer).
 //
 // Threading contract mirrors ga::Engine: control-thread calls only set
 // atomic command bits; process() — the audio thread — applies them at block
@@ -53,6 +52,12 @@ class Looper {
   // the audio thread performs the copy (in the shared audio callback the
   // echo has already finished its block, so the tape is stable).
   void requestCapture(const int16_t* src, uint32_t frames) {
+    // One SPSC request may be pending. Reject a second instead of overwriting
+    // capLen_: the audio thread must never pair one source pointer with a
+    // newer request's length.
+    if (!src || frames == 0 ||
+        capSrc_.load(std::memory_order_acquire) != nullptr)
+      return;
     capLen_ = frames;
     capSrc_.store(src, std::memory_order_release);
   }

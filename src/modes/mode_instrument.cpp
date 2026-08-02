@@ -5,6 +5,7 @@
 
 #include "../ambient.h"
 #include "../firefly.h"
+#include "../goodnight.h"
 #include "../pulse.h"
 #include "../settings.h"
 #include "../viz.h"
@@ -33,10 +34,8 @@ constexpr float kTiltFbFull = 45.0f;
 // id nut dzwonków — poza siatką (0..55), tłem (1000+) i duchami (1100+)
 constexpr int32_t kChimeIdBase = 900;
 
-// Gesture state lives at FILE scope, not in the object: INSTRUMENT and
-// SPIEW are the same physical instrument, so flipping the "6 ucho" switch
-// (two separate mode objects) must not reset the gravity filter and tilts
-// — the sound used to jump to neutral and crawl back for a second.
+// Gesture state lives at FILE scope so visits to settings do not reset the
+// gravity filter and tilts — the sound must not jump to neutral on return.
 float s_tiltNorm = 0.0f;    // boki = jasność, wygładzone -1..1
 float s_tiltFbNorm = 0.0f;  // do/od siebie = przestrzeń
 float s_gravX = 0.0f, s_gravY = 0.0f, s_gravZ = 1.0f;  // wolny LP grawitacji
@@ -52,18 +51,21 @@ struct PendingOff { uint32_t atMs; int32_t id; };
 PendingOff s_pending[8];
 int s_pendingCount = 0;
 
-// goodnight dwell timer — at file scope so a key press can restart it:
-// without this, a key woke the box for one IMU step and the still-face-down
-// timer relit the lullaby 20 ms later
-uint32_t s_faceDownSince = 0;
+struct WindPhraseState {
+  ambient::GardenPhrase phrase;
+  int pos = 0;
+  uint32_t nextMs = 0;
+  float velocity = 0.0f;
+  bool active = false;
+};
+WindPhraseState s_windPhrase;
 }  // namespace
-
-uint32_t ModeInstrument::lastChimeMs() { return s_lastChimeMs; }
 
 void ModeInstrument::enter(ModeCtx& ctx) {
   settings::applyToEngine(ctx.engine);
   ambient::setCutoffBase(kNeutralCutoff);
   s_pendingCount = 0;
+  s_windPhrase.active = false;
   s_chimeStep = ga::scaleStepsPerOctave(settings::scale());  // start w środku
   viz::setScene(settings::vizScene());
   // scena mapuje wysokość na X/Y wg realnego zakresu siatki tej skali;
@@ -86,12 +88,13 @@ void ModeInstrument::enter(ModeCtx& ctx) {
   static bool s_greeted = false;
   if (!s_greeted) {
     s_greeted = true;
-    viz::toast("graj!");  // ŚPIEW nadpisze swoim
+    viz::toast("graj!");
   }
   markDirty();
 }
 
 void ModeInstrument::exit(ModeCtx& ctx) {
+  windPhraseCancel(ctx);
   ctx.engine.allNotesOff();
   ambient::setCutoffBase(kNeutralCutoff);
   ambient::setSpaceBase(0.5f);  // głębia też wraca do neutrum, nie tylko jasność
@@ -107,8 +110,8 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
   // column must stack into one chord. (gridToCents clamps the far corner.)
   const int gridCol = row == 0 ? col + 1 : col;
   if (down) {
+    windPhraseCancel(ctx);  // a real key always owns the foreground
     ambient::notePresence();
-    s_faceDownSince = 0;  // a key means awake — the goodnight dwell restarts
     pulse::onOnset();  // even presses summon the heart, in YOUR tempo
     const int gridRow = 3 - row;
     const float cents = gridToCents(settings::scale(), gridCol, gridRow);
@@ -131,21 +134,33 @@ void ModeInstrument::onGoHold(ModeCtx& ctx) {
 
 void ModeInstrument::triggerChime(ModeCtx& ctx, float energy, float dir) {
   // MACHANIE = WIATR WSPOMNIEŃ: klawisze robią nowe nuty, potrząsanie gra
-  // stare — każdy zamach wyrywa z ogrodu nutkę, którą dziecko naprawdę
-  // zagrało. Im więcej grasz, tym bogatsza grzechotka; ruch nagradza
-  // klawisze zamiast z nimi konkurować. Kierunek machania prowadzi
-  // przyprawy transpozycji w górę albo w dół.
-  float cents;
-  if (!ambient::gardenPluck(&cents, dir)) {
+  // stare — jeden zamach wyrywa CAŁĄ krótką frazę wraz z rytmem dziecka.
+  // Kierunek przenosi cały kontur w górę albo w dół; nie losuje każdej nuty
+  // osobno. Następny zamach poczeka, aż wspomnienie dopowie zdanie.
+  if (s_windPhrase.active) return;
+  ambient::GardenPhrase phrase;
+  if (!ambient::gardenPluck(&phrase, dir)) {
     // pusty ogród: zapasowa drabinka skali, żeby nigdy nie było niemo
     const int hi = 2 * ga::scaleStepsPerOctave(settings::scale());
     s_chimeStep += dir >= 0.0f ? 1 : -1;
     if (s_chimeStep < 0) s_chimeStep = 1;
     if (s_chimeStep > hi) s_chimeStep = hi - 1;
-    cents = ga::scaleStepCents(settings::scale(), s_chimeStep);
+    phrase.count = 1;
+    phrase.note[0] = {ga::scaleStepCents(settings::scale(), s_chimeStep), 0};
   }
 
-  const float vel = clampf(0.45f + (energy - kSwingOn) * 0.5f, 0.45f, 0.90f);
+  windPhraseCancel(ctx);  // release the tail of the preceding sentence
+  s_windPhrase.phrase = phrase;
+  s_windPhrase.pos = 0;
+  s_windPhrase.nextMs = millis();
+  s_windPhrase.velocity =
+      clampf(0.45f + (energy - kSwingOn) * 0.5f, 0.45f, 0.90f);
+  s_windPhrase.active = true;
+  ambient::notePresence();  // one human gesture, not six synthetic presences
+  windPhraseStep(ctx, s_windPhrase.nextMs);
+}
+
+void ModeInstrument::playChimeNote(ModeCtx& ctx, float cents, float vel) {
   const int32_t id = kChimeIdBase + (s_chimeSlot++ & 7);
   // Atak łagodny, ale KRÓTSZY niż nuta: przy 250 ms narastania i wyciszeniu
   // po 150 ms dźwięk gasł, zanim doszedł do pełni — wspomnień nie było
@@ -157,9 +172,33 @@ void ModeInstrument::triggerChime(ModeCtx& ctx, float energy, float dir) {
   if (s_pendingCount < 8)
     s_pending[s_pendingCount++] = {millis() + 420, id};  // zdąży wybrzmieć
 
-  ambient::notePresence();
+  s_lastChimeMs = millis();
   viz::chime(cents, vel);
   firefly::note(cents, vel);
+}
+
+void ModeInstrument::windPhraseStep(ModeCtx& ctx, uint32_t nowMs) {
+  if (!s_windPhrase.active ||
+      (int32_t)(nowMs - s_windPhrase.nextMs) < 0) return;
+  const int i = s_windPhrase.pos;
+  playChimeNote(ctx, s_windPhrase.phrase.note[i].cents,
+                s_windPhrase.velocity * (i == 0 ? 1.0f : 0.88f));
+  ++s_windPhrase.pos;
+  if (s_windPhrase.pos >= s_windPhrase.phrase.count) {
+    s_windPhrase.active = false;
+    return;
+  }
+  uint32_t gap = s_windPhrase.phrase.note[s_windPhrase.pos].gapMs;
+  if (gap < 70) gap = 70;  // a recorded chord becomes a tiny wind-strum
+  if (gap > 1200) gap = 1200;
+  s_windPhrase.nextMs = nowMs + gap;
+}
+
+void ModeInstrument::windPhraseCancel(ModeCtx& ctx) {
+  s_windPhrase.active = false;
+  for (int i = 0; i < s_pendingCount; ++i)
+    ctx.engine.noteOff(s_pending[i].id);
+  s_pendingCount = 0;
 }
 
 void ModeInstrument::imuStep(ModeCtx& ctx) {
@@ -176,26 +215,15 @@ void ModeInstrument::imuStep(ModeCtx& ctx) {
   const float e = sqrtf(lx * lx + ly * ly + lz * lz);
   s_shakeEnv += (e - s_shakeEnv) * 0.25f;
 
-  // DOBRANOC: położone ekranem w dół i nieruchome przez ~1.2 s — ogród
+  // DOBRANOC: położone ekranem w dół przez ~1.2 s — ogród
   // śpiewa kołysankę (patrz ambient.h). Podniesienie budzi natychmiast.
-  // Detekcja na SUROWYM az: wolny filtr grawitacji potrzebował ~1.5 s,
-  // zanim w ogóle zauważył obrót, i rytuał wyglądał na zepsuty. Duszę
-  // zapisuje ambient dopiero WE ŚNIE — zapis NVS zatrzymuje rdzeń audio
-  // i zgrzytałby w środku muzyki.
+  // Detekcja na SUROWYM az: wolny filtr grawitacji potrzebuje czasu, by
+  // dogonić obrót, więc nie może bramkować timera (to podwajało deklarowane
+  // 1.2 s, a drgania obudowy potrafiły blokować gest jeszcze dłużej).
+  // Duszę zapisuje ambient dopiero WE ŚNIE — zapis NVS zatrzymuje rdzeń
+  // audio i zgrzytałby w środku muzyki.
   const uint32_t nowMs = millis();
-  if (az < -0.80f && s_shakeEnv < 0.30f) {
-    if (s_faceDownSince == 0) s_faceDownSince = nowMs;
-    else if (nowMs - s_faceDownSince > 1200 && !ambient::lullabyActive()) {
-      Serial.println("grajek: dobranoc — kolysanka");
-      ambient::lullabyStart();
-    }
-  } else if (az > -0.55f) {  // histereza: drgnięcia nie zrywają rytuału
-    s_faceDownSince = 0;
-    if (ambient::lullabyActive()) {
-      Serial.println("grajek: pobudka");
-      ambient::lullabyAbort();
-    }
-  }
+  goodnight::sample(nowMs, az);
   if (ambient::lullabyActive()) return;  // we śnie: bez dzwonków i przechyłów
 
   // MACHANIE: zamach powyżej progu gra dzwonek; następny dopiero, gdy ruch
@@ -258,6 +286,8 @@ void ModeInstrument::tick(ModeCtx& ctx, float dt) {
 
   // zaplanowane wyciszenia dzwonków (nuta krótka, wybrzmiewa release'em)
   const uint32_t now = millis();
+  if (ambient::lullabyActive()) windPhraseCancel(ctx);
+  else windPhraseStep(ctx, now);
   for (int i = 0; i < s_pendingCount;) {
     if ((int32_t)(now - s_pending[i].atMs) >= 0) {
       ctx.engine.noteOff(s_pending[i].id);
@@ -269,10 +299,10 @@ void ModeInstrument::tick(ModeCtx& ctx, float dt) {
 
   // duch zagrał wspomnienie? niech rozbłyśnie jego iskierka na łące
   // (i świetlik w pudełku — miękka poświata zamiast błysku)
-  float ghostCents = 0.0f;
-  if (ambient::pollGhost(&ghostCents)) {
-    viz::ghost(ghostCents);
-    firefly::ghost(ghostCents);
+  float ghostSource = 0.0f, ghostPlayed = 0.0f;
+  if (ambient::pollGhost(&ghostSource, &ghostPlayed)) {
+    viz::ghost(ghostSource);
+    firefly::ghost(ghostPlayed);
   }
 
   // łąka żyje cały czas — pełna klatka co przebieg (main ogranicza do ~25 fps)

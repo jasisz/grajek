@@ -44,19 +44,11 @@ void noteOn(int id, float cents, float vel);
 void noteOff(int id);
 void chime(float cents, float vel);  // dzwonek z machania
 void ghost(float cents);             // ogród właśnie zagrał wspomnienie
-void voice(float cents, float lvl);  // śpiew na żywo: chłodna kometa
-                                     // na wysokości głosu (gaśnie sama)
 void setTilt(float norm);            // przechył boczny -1..1 (jasność)
 void setDepth(float norm);           // przechył do/od siebie -1..1 (przestrzeń)
 
 // duży napis na ~1.2 s (zmiana barwy itp.); nullptr nic nie robi
 void toast(const char* text);
-
-// ucho otwarte: pulsujący pierścień w rogu — uczciwy znak "pudełko słucha"
-// i jedyna stała różnica między ŚPIEWEM a INSTRUMENTEM
-void setListening(bool on);
-// głośność głosu 0..1 — pierścień rośnie, gdy pudełko słyszy śpiew
-void setVoiceLevel(float lvl);
 
 void draw(M5Canvas& g);
 

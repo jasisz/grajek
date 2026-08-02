@@ -15,10 +15,11 @@
 //
 // Controls: TAB scale | ` timbre | BACKSPACE base octave | SHIFT+L latch
 //           left/right arrows: pitch bend (IMU stand-in) | up/down: filter
+//           SHIFT+, / SHIFT+. = shake a remembered phrase down / up
 //           ENTER panic (silence + bend + re-center; keeps the loop) | ESC quit
 //
-// Looper (records what you play, layers on top — same core as the device's
-// future LOOP mode, fed there by the microphone):
+// Looper (records what you play and layers on top; currently host-only — the
+// device transport is deliberately deferred until it earns a gesture):
 //           SHIFT+R record: 1st press starts the loop, 2nd closes it,
 //                   after that it toggles overdub (each take = one layer)
 //           SHIFT+P play/stop | SHIFT+U undo last layer | SHIFT+C clear
@@ -46,6 +47,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <vector>
 
@@ -89,9 +91,9 @@ uint32_t g_echoFrames = 0;
 
 // The background (tampura): a quiet pedal under everything — random notes
 // over a drone sound intentional. Default is 1/1 + 3/2; the player can PICK
-// their own chord (up to 4 notes) in pick mode (SHIFT+D here; on the device
-// this will be hold-a-modifier + press grid keys). Follows toss modulations
-// automatically (voices track BaseHz live).
+// their own chord (up to 4 notes) in pick mode (SHIFT+D here; firmware keeps
+// the hook, while the current device UI only toggles its default background).
+// Follows toss modulations automatically (voices track BaseHz live).
 bool g_tampura = true;
 bool g_pickMode = false;
 struct BgNote { float cents; int32_t id; };
@@ -109,7 +111,7 @@ int g_uiPreset = 3;           // what the player's keys currently use
 
 void bgNoteOn(int32_t id, float cents, float vel) {
   g_engine.setParam(Param::TimbrePreset, (float)kBgPreset);
-  g_engine.noteOn(id, cents, vel);
+  g_engine.noteOnPersistent(id, cents, vel);
   g_engine.setParam(Param::TimbrePreset, (float)g_uiPreset);
 }
 
@@ -126,22 +128,68 @@ struct Weather {
 };
 Weather g_weather;
 
-// Ghost garden: minutes-scale memory. After ~7 s of silence the box quietly
-// re-sows the player's own notes from the recent past (soft attack, low
-// velocity, sometimes transposed by a pure interval). The player's first
-// real key silences the ghosts immediately — it never fights the human.
+// Ghost garden: minutes-scale memory. It keeps short gestures, not a sack of
+// unrelated pitches: phrase boundaries plus the player's inter-onset timing.
+// After ~7 s of silence the box quietly re-sows one whole recent phrase. The
+// player's first real key silences the ghosts immediately — it never fights
+// the human.
+struct GardenPhraseNote {
+  float cents = 0.0f;
+  uint16_t gapMs = 0;
+};
+
+constexpr int kGardenPhraseMax = 6;
+struct GardenPhrase {
+  GardenPhraseNote note[kGardenPhraseMax];
+  int count = 0;
+};
+
+struct GardenReplay {
+  GardenPhrase phrase;
+  int pos = 0;
+  double nextAt = 0.0;
+  float transpose = 0.0f;
+  float velocity = 0.0f;
+  bool active = false;
+};
+
+struct GardenNoteOff {
+  double at = 0.0;
+  int32_t id = -1;
+};
+
 struct GhostGarden {
-  struct Mem { float cents; double t; };
+  struct Mem {
+    float cents;
+    uint16_t gapMs;
+    bool phraseStart;
+  };
   static constexpr int kCap = 32;
   Mem ring[kCap];
   int head = 0, count = 0;
   double lastInput = 0.0;
+  double lastOnset = 0.0;
+  double captureStarted = 0.0;
+  int captureNotes = 0;
+  bool haveLiveOnset = false;
   double nextAt = 0.0;
   uint32_t activeMask = 0;  // which of the 4 ghost ids are sounding
   int nextSlot = 0;
 };
 GhostGarden g_garden;
+GardenReplay g_ghostPhrase;
+GardenReplay g_shakePhrase;
+GardenNoteOff g_ghostOffs[6];
+GardenNoteOff g_shakeOffs[8];
+int g_ghostOffCount = 0;
+int g_shakeOffCount = 0;
+uint32_t g_shakeMask = 0;
+int g_shakeSlot = 0;
+int g_shakeStep = 1;
 constexpr int32_t kGhostIdBase = 1100;
+constexpr int32_t kShakeIdBase = 1120;
+constexpr double kPhraseBreakSec = 1.5;
+constexpr double kPhraseMaxDurationSec = 5.0;
 // 7 s, synced with the device: 12 s made the box's memory practically
 // inaudible in normal play (a child does not pause that long)
 constexpr double kGhostIdleSec = 7.0;
@@ -173,123 +221,6 @@ std::atomic<bool> g_recOn{false};
 std::atomic<uint32_t> g_recIdx{0};
 std::vector<int16_t>* g_recBuf = nullptr;
 
-// --- the EAR: hold SHIFT+M and the box listens. Your voice joins the chain
-// where the synth does — the tape ages it, the strings halo it in pure
-// intervals, the room holds it — and keeps returning after you let go.
-// Cat-not-Furby + privacy: the input device runs ONLY while the ear is held
-// open (auto-repeat keeps it open; ~0.8 s after the last repeat it closes),
-// and nothing is ever stored. On the device this becomes hold-a-key + the
-// ES8311 mic. Headphones recommended on laptop speakers (feedback).
-AudioQueueRef g_inQueue = nullptr;
-std::atomic<bool> g_earOpen{false};
-std::atomic<bool> g_duetOn{false};  // the box is humming along (defined
-                                    // early: the duck and the status read it)
-double g_earHeldUntil = 0.0;
-
-// tiny SPSC float ring: input-queue thread -> output-queue thread
-constexpr uint32_t kMicRingSize = 16384;  // power of two
-float g_micRing[kMicRingSize];
-std::atomic<uint32_t> g_micHead{0}, g_micTail{0};
-
-void micPush(const float* v, int n) {
-  uint32_t h = g_micHead.load(std::memory_order_relaxed);
-  const uint32_t t = g_micTail.load(std::memory_order_acquire);
-  for (int i = 0; i < n; ++i) {
-    if (h - t >= kMicRingSize) break;  // full: drop
-    g_micRing[h & (kMicRingSize - 1)] = v[i];
-    ++h;
-  }
-  g_micHead.store(h, std::memory_order_release);
-}
-
-float micPop() {
-  const uint32_t t = g_micTail.load(std::memory_order_relaxed);
-  const uint32_t h = g_micHead.load(std::memory_order_acquire);
-  if (t == h) return 0.0f;
-  const float v = g_micRing[t & (kMicRingSize - 1)];
-  g_micTail.store(t + 1, std::memory_order_release);
-  return v;
-}
-
-// DUET capture: while the ear is open, the last ~2 s of the mic also land
-// in an analysis ring; duetTick() reads the freshest window out of it for
-// live pitch tracking of the singer.
-constexpr uint32_t kCapMax = 96000;  // 2 s @ 48 kHz
-float g_capBuf[kCapMax];
-std::atomic<uint32_t> g_capCount{0};
-
-void earInCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf,
-                   const AudioTimeStamp*, UInt32,
-                   const AudioStreamPacketDescription*) {
-  if (g_earOpen.load(std::memory_order_relaxed)) {
-    const float* v = (const float*)buf->mAudioData;
-    const int n = (int)(buf->mAudioDataByteSize / sizeof(float));
-    micPush(v, n);
-    // RING, not a tape end: the count grows monotonically and writes wrap —
-    // a linear buffer froze the duet after its 2 s filled up
-    uint32_t c = g_capCount.load(std::memory_order_relaxed);
-    for (int i = 0; i < n; ++i) g_capBuf[(c++) % kCapMax] = v[i];
-    g_capCount.store(c, std::memory_order_release);
-  }
-  AudioQueueEnqueueBuffer(q, buf, 0, nullptr);
-}
-
-bool earOpen() {
-  // A FRESH queue every time: stopping an input queue hands its buffers
-  // back to the callback, whose re-enqueue silently fails during the reset
-  // (-66632) — a reused queue restarts with no buffers and the ear is deaf
-  // from the second opening on. Creation is milliseconds; the permission
-  // prompt only ever appears once.
-  if (g_inQueue) {
-    AudioQueueDispose(g_inQueue, true);
-    g_inQueue = nullptr;
-  }
-  AudioStreamBasicDescription fmt = {};
-  fmt.mSampleRate = kSr;
-  fmt.mFormatID = kAudioFormatLinearPCM;
-  fmt.mFormatFlags =
-      kLinearPCMFormatFlagIsFloat | kLinearPCMFormatFlagIsPacked;
-  fmt.mChannelsPerFrame = 1;
-  fmt.mBitsPerChannel = 32;
-  fmt.mBytesPerFrame = 4;
-  fmt.mFramesPerPacket = 1;
-  fmt.mBytesPerPacket = 4;
-  if (AudioQueueNewInput(&fmt, earInCallback, nullptr, nullptr, nullptr, 0,
-                         &g_inQueue) != noErr) {
-    g_inQueue = nullptr;
-    return false;
-  }
-  for (int i = 0; i < 3; ++i) {
-    AudioQueueBufferRef b = nullptr;
-    if (AudioQueueAllocateBuffer(g_inQueue, 1024 * sizeof(float), &b) !=
-        noErr) {
-      AudioQueueDispose(g_inQueue, true);
-      g_inQueue = nullptr;
-      return false;
-    }
-    AudioQueueEnqueueBuffer(g_inQueue, b, 0, nullptr);
-  }
-  g_micHead.store(0);
-  g_micTail.store(0);
-  g_capCount.store(0);  // a fresh take for the duet analysis
-  if (AudioQueueStart(g_inQueue, nullptr) != noErr) {
-    AudioQueueDispose(g_inQueue, true);
-    g_inQueue = nullptr;
-    return false;
-  }
-  g_earOpen.store(true);
-  return true;
-}
-
-void earClose() {
-  g_earOpen.store(false);
-  if (g_inQueue) {
-    AudioQueueStop(g_inQueue, true);
-    AudioQueueDispose(g_inQueue, true);
-    g_inQueue = nullptr;
-  }
-}
-
 void backgroundApply() {
   for (int i = 0; i < g_bgCount; ++i) {
     if (g_tampura)
@@ -297,6 +228,20 @@ void backgroundApply() {
     else
       g_engine.noteOff(g_bg[i].id);
   }
+}
+
+int32_t nextBackgroundId() {
+  // IDs are reusable only after their old note has bowed out. A blind
+  // modulo-16 rotation eventually landed on an active root and a later
+  // noteOff for the changing fifth could cut that root too.
+  for (int attempt = 0; attempt < 16; ++attempt) {
+    const int32_t id = 1000 + (g_bgNextId++ & 15);
+    bool used = false;
+    for (int i = 0; i < g_bgCount; ++i)
+      if (g_bg[i].id == id) used = true;
+    if (!used) return id;
+  }
+  return -1;  // impossible with a four-note background and sixteen IDs
 }
 
 // Pick mode: a grid click toggles that pitch in the background chord.
@@ -317,7 +262,8 @@ void backgroundToggleNote(float cents) {
     for (int j = 0; j < 3; ++j) g_bg[j] = g_bg[j + 1];
     --g_bgCount;
   }
-  const int32_t id = 1000 + (g_bgNextId++ & 15);
+  const int32_t id = nextBackgroundId();
+  if (id < 0) return;
   g_bg[g_bgCount] = {cents, id};
   ++g_bgCount;
   if (g_tampura) bgNoteOn(id, cents, g_bgCount == 1 ? 0.22f : 0.16f);
@@ -340,10 +286,6 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
     envLocal += (a > envLocal ? 0.004f : 0.00001f) * (a - envLocal);
   }
   g_env.store(envLocal, std::memory_order_relaxed);
-  // The ear: the voice enters the chain exactly where the synth does — it
-  // will be taped, haloed by the strings and held by the room.
-  if (g_earOpen.load(std::memory_order_relaxed))
-    for (int i = 0; i < frames; ++i) samples[i] += micPop() * 0.8f;
   // Sympathetic strings: the dry synth excites the JI halo.
   g_strings.process(samples, samples, frames);
   // Generosity layer: everything played joins a fading ambient memory.
@@ -352,25 +294,8 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
   g_looper.process(samples, samples, frames);
   // Reverb last, so the loop and echo sit in the same room.
   g_reverb.process(samples, frames);
-  // Walkie-talkie anti-feedback: while the ear is open the OUTPUT ducks to
-  // near-silence (the tape and strings still receive the full-level voice),
-  // so the mic->speaker->mic loop physically cannot close — and when you
-  // release, the volume swells back and the box "answers". On the device
-  // (mic 2 cm from the speaker) this is the difference between an
-  // instrument and a howl.
-  static float duck = 1.0f;
-  // with the duet humming, ease the duck so the companion is audible
-  // (still -10 dB — the acoustic loop stays starved)
-  const float duckTarget =
-      g_earOpen.load(std::memory_order_relaxed)
-          ? (g_duetOn.load(std::memory_order_relaxed) ? 0.30f : 0.12f)
-          : 1.0f;
-  for (int i = 0; i < frames; ++i) {
-    duck += 0.0008f * (duckTarget - duck);  // ~30 ms ramp, no clicks
-    samples[i] *= duck;
-  }
   // final glue clip — stacked layers can sum hot; keep the edge soft
-  // (device adds a stricter child-ear ceiling on top of this)
+  // (device adds a stricter child-safe output ceiling on top of this)
   for (int i = 0; i < frames; ++i)
     samples[i] = softClip(samples[i]) * 0.85f;
   // session recorder taps the very end of the chain
@@ -548,19 +473,106 @@ void weatherTick(const Ui& ui) {
       g_weather.fifthVariant = want;
       g_engine.noteOff(g_bg[1].id);
       g_bg[1].cents = want ? 968.8f : 702.0f;
-      g_bg[1].id = 1000 + (g_bgNextId++ & 15);
-      bgNoteOn(g_bg[1].id, g_bg[1].cents, want ? 0.14f : 0.16f);
+      const int32_t id = nextBackgroundId();
+      if (id >= 0) {
+        g_bg[1].id = id;
+        bgNoteOn(id, g_bg[1].cents, want ? 0.14f : 0.16f);
+      }
     }
   }
 }
 
 float rnd01f() { return (float)(rand() % 10000) * 0.0001f; }
 
+const GhostGarden::Mem& gardenMemoryAt(int idxOldest) {
+  const int idx = (g_garden.head - g_garden.count + idxOldest +
+                   2 * GhostGarden::kCap) % GhostGarden::kCap;
+  return g_garden.ring[idx];
+}
+
+uint16_t replayGapMs(uint16_t recordedMs) {
+  // Keep the human rhythm, but make chords legible to a slow envelope and
+  // cap long hesitations that belong between phrases, not inside one.
+  if (recordedMs < 70) return 70;
+  if (recordedMs > 1200) return 1200;
+  return recordedMs;
+}
+
+bool phraseAtAnchor(GardenPhrase* out, int anchor) {
+  if (!out || anchor < 0 || anchor >= g_garden.count) return false;
+  int first = anchor;
+  while (first > 0 && !gardenMemoryAt(first).phraseStart) --first;
+  int last = anchor;
+  while (last + 1 < g_garden.count &&
+         !gardenMemoryAt(last + 1).phraseStart)
+    ++last;
+
+  int window = first;
+  const int available = last - first + 1;
+  if (available > kGardenPhraseMax) {
+    window = anchor - kGardenPhraseMax / 2;
+    if (window < first) window = first;
+    const int latest = last - kGardenPhraseMax + 1;
+    if (window > latest) window = latest;
+  }
+  out->count = std::min(available, kGardenPhraseMax);
+  for (int i = 0; i < out->count; ++i) {
+    const GhostGarden::Mem& m = gardenMemoryAt(window + i);
+    out->note[i] = {m.cents, i == 0 ? (uint16_t)0 : m.gapMs};
+  }
+  return out->count > 0;
+}
+
+bool selectGardenPhrase(GardenPhrase* out) {
+  if (!out || g_garden.count == 0) return false;
+  GardenPhrase fallback;
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    const float u = rnd01f();
+    int back = (int)(u * u * (float)g_garden.count);
+    if (back >= g_garden.count) back = g_garden.count - 1;
+    const int anchor = g_garden.count - 1 - back;
+    GardenPhrase candidate;
+    if (!phraseAtAnchor(&candidate, anchor)) continue;
+    if (fallback.count == 0) fallback = candidate;
+    if (candidate.count >= 2) {
+      *out = candidate;
+      return true;
+    }
+  }
+  *out = fallback;
+  return out->count > 0;
+}
+
 void gardenPush(float cents) {
+  const double now = nowSec();
+  const double gap = g_garden.haveLiveOnset
+                         ? now - g_garden.lastOnset
+                         : 0.0;
+  const bool startsPhrase =
+      !g_garden.haveLiveOnset || gap >= kPhraseBreakSec ||
+      g_garden.captureNotes >= kGardenPhraseMax ||
+      now - g_garden.captureStarted >= kPhraseMaxDurationSec;
+  const uint16_t storedGap =
+      startsPhrase ? 0 : (uint16_t)std::min(1499.0, gap * 1000.0 + 0.5);
   g_playedThisSession = true;
-  g_garden.ring[g_garden.head] = {cents, nowSec()};
+  g_garden.ring[g_garden.head] = {cents, storedGap, startsPhrase};
   g_garden.head = (g_garden.head + 1) % GhostGarden::kCap;
-  if (g_garden.count < GhostGarden::kCap) ++g_garden.count;
+  if (g_garden.count < GhostGarden::kCap) {
+    ++g_garden.count;
+  } else {
+    // The new logical oldest may be the middle of an overwritten phrase.
+    g_garden.ring[g_garden.head].phraseStart = true;
+    g_garden.ring[g_garden.head].gapMs = 0;
+  }
+  if (startsPhrase) {
+    g_garden.captureStarted = now;
+    g_garden.captureNotes = 1;
+  } else {
+    ++g_garden.captureNotes;
+  }
+  g_garden.lastOnset = now;
+  g_garden.lastInput = now;
+  g_garden.haveLiveOnset = true;
 }
 
 void pulseOnOnset() {
@@ -666,61 +678,193 @@ void pulseTick() {
   while (p.nextBeatAt < now) p.nextBeatAt += p.period;  // never spiral
 }
 
+double expDelay(double meanSec) {
+  return -meanSec * log(1.0 - 0.9999 * (double)rnd01f());
+}
+
+void drainGardenOffs(GardenNoteOff* offs, int& count, int32_t idBase,
+                     int slots, uint32_t& activeMask, double now) {
+  for (int i = 0; i < count;) {
+    if (offs[i].at <= now) {
+      g_engine.noteOff(offs[i].id);
+      const int slot = (int)(offs[i].id - idBase);
+      if (slot >= 0 && slot < slots) activeMask &= ~(1u << slot);
+      offs[i] = offs[--count];
+    } else {
+      ++i;
+    }
+  }
+}
+
+void drainGardenOffs() {
+  const double now = nowSec();
+  drainGardenOffs(g_ghostOffs, g_ghostOffCount, kGhostIdBase, 4,
+                  g_garden.activeMask, now);
+  drainGardenOffs(g_shakeOffs, g_shakeOffCount, kShakeIdBase, 8,
+                  g_shakeMask, now);
+}
+
 void gardenSilenceGhosts() {
-  if (!g_garden.activeMask) return;
+  g_ghostPhrase.active = false;
+  g_garden.nextAt = 0.0;
+  for (int i = 0; i < g_ghostOffCount; ++i)
+    g_engine.noteOff(g_ghostOffs[i].id);
+  g_ghostOffCount = 0;
   for (int i = 0; i < 4; ++i)
     if (g_garden.activeMask & (1u << i)) g_engine.noteOff(kGhostIdBase + i);
   g_garden.activeMask = 0;
 }
 
-double expDelay(double meanSec) {
-  return -meanSec * log(1.0 - 0.9999 * (double)rnd01f());
+void gardenSilenceShake() {
+  g_shakePhrase.active = false;
+  for (int i = 0; i < g_shakeOffCount; ++i)
+    g_engine.noteOff(g_shakeOffs[i].id);
+  g_shakeOffCount = 0;
+  for (int i = 0; i < 8; ++i)
+    if (g_shakeMask & (1u << i)) g_engine.noteOff(kShakeIdBase + i);
+  g_shakeMask = 0;
+}
+
+void scheduleNextGhost(double now, bool firstAfterSilence) {
+  const double delay = firstAfterSilence ? 1.5 + expDelay(6.0)
+                                         : 0.8 + expDelay(9.0);
+  double target = now + delay;
+  // Only the phrase start snaps to the remembered pulse. The internal
+  // timing remains the player's own instead of quantizing every note.
+  if (g_pulse.memory > 0.15) {
+    const double k = round((target - g_pulse.lastOnset) / g_pulse.memory);
+    target = g_pulse.lastOnset + k * g_pulse.memory;
+    while (target < now + 0.2) target += g_pulse.memory;
+  }
+  g_garden.nextAt = target;
+}
+
+void ghostPhraseStart(double now) {
+  GardenPhrase phrase;
+  if (!selectGardenPhrase(&phrase)) return;
+  gardenSilenceGhosts();
+  g_ghostPhrase.phrase = phrase;
+  g_ghostPhrase.pos = 0;
+  g_ghostPhrase.nextAt = now;
+  g_ghostPhrase.velocity = 0.25f + 0.11f * rnd01f();
+  const float r = rnd01f();
+  if (r < 0.75f) g_ghostPhrase.transpose = 0.0f;
+  else if (r < 0.84f) g_ghostPhrase.transpose = 1200.0f;
+  else if (r < 0.92f) g_ghostPhrase.transpose = 702.0f;
+  else g_ghostPhrase.transpose = -498.0f;
+  g_ghostPhrase.active = true;
+  printf("\n  ~ duch-fraza: %d nut, przesuniecie %+.0f c\n", phrase.count,
+         (double)g_ghostPhrase.transpose);
+}
+
+void ghostPhraseTick(const Ui& ui, double now) {
+  if (!g_ghostPhrase.active || now < g_ghostPhrase.nextAt) return;
+  const int i = g_ghostPhrase.pos;
+  const bool more = i + 1 < g_ghostPhrase.phrase.count;
+  const uint16_t nextGap =
+      more ? replayGapMs(g_ghostPhrase.phrase.note[i + 1].gapMs) : 0;
+  const double hold = more ? std::min(1.0, (nextGap + 180) * 0.001) : 1.4;
+  const int slot = g_garden.nextSlot++ & 3;
+  const int32_t id = kGhostIdBase + slot;
+  g_garden.activeMask |= (1u << slot);
+  g_engine.setParam(Param::EnvAttack, 0.22f);
+  g_engine.noteOn(id,
+                  g_ghostPhrase.phrase.note[i].cents +
+                      g_ghostPhrase.transpose,
+                  g_ghostPhrase.velocity * (i == 0 ? 1.0f : 0.88f));
+  g_engine.setParam(Param::EnvAttack, timbrePreset(ui.preset).attack);
+  if (g_ghostOffCount < (int)(sizeof g_ghostOffs / sizeof g_ghostOffs[0]))
+    g_ghostOffs[g_ghostOffCount++] = {now + hold, id};
+
+  ++g_ghostPhrase.pos;
+  if (more) {
+    g_ghostPhrase.nextAt = now + nextGap * 0.001;
+  } else {
+    g_ghostPhrase.active = false;
+    scheduleNextGhost(now, false);
+  }
 }
 
 void gardenTick(const Ui& ui) {
   if (!g_playedThisSession) return;  // ghosts continue sessions, never start them
   const double now = nowSec();
   if (now - g_garden.lastInput < kGhostIdleSec || g_garden.count == 0) {
-    g_garden.nextAt = 0.0;
+    if (g_ghostPhrase.active || g_garden.activeMask || g_ghostOffCount)
+      gardenSilenceGhosts();
+    else
+      g_garden.nextAt = 0.0;
+    return;
+  }
+  if (g_ghostPhrase.active) {
+    ghostPhraseTick(ui, now);
     return;
   }
   if (g_garden.nextAt == 0.0) {
-    g_garden.nextAt = now + 2.0 + expDelay(9.0);  // first ghost comes sooner
+    scheduleNextGhost(now, true);
     return;
   }
   if (now < g_garden.nextAt) return;
-  g_garden.nextAt = now + expDelay(12.0);
-  // the ghosts remember your last pulse: sowing snaps to that beat grid
-  if (g_pulse.memory > 0.15) {
-    const double k =
-        round((g_garden.nextAt - g_pulse.lastOnset) / g_pulse.memory);
-    g_garden.nextAt = g_pulse.lastOnset + k * g_pulse.memory;
-  }
+  ghostPhraseStart(now);
+  ghostPhraseTick(ui, now);
+}
 
-  // pick a remembered note, biased toward the fresh end of the ring
-  const float u = rnd01f();
-  const int back = (int)(u * u * (float)(g_garden.count - 1));
-  const int idx =
-      (g_garden.head - 1 - back + 2 * GhostGarden::kCap) % GhostGarden::kCap;
-  float cents = g_garden.ring[idx].cents;
-  const float r = rnd01f();
-  if (r < 0.40f) { /* as played */ }
-  else if (r < 0.70f) cents += 1200.0f;  // octave up
-  else if (r < 0.85f) cents += 702.0f;   // pure fifth
-  else cents -= 498.0f;                  // fourth below
-  const float vel = 0.20f + 0.15f * rnd01f();
-
-  const int slot = g_garden.nextSlot++ & 3;
-  const int32_t id = kGhostIdBase + slot;
-  g_garden.activeMask |= (1u << slot);
-  // soft attack just for this note — the engine's event queue is FIFO and
-  // fully drained before each render, so this sequence is race-free
-  g_engine.setParam(Param::EnvAttack, 1.2f);
-  g_engine.noteOn(id, cents, vel);
+void shakePhraseTick(const Ui& ui, double now) {
+  if (!g_shakePhrase.active || now < g_shakePhrase.nextAt) return;
+  const int i = g_shakePhrase.pos;
+  const int slot = g_shakeSlot++ & 7;
+  const int32_t id = kShakeIdBase + slot;
+  g_shakeMask |= (1u << slot);
+  g_engine.setParam(Param::EnvAttack, 0.06f);
+  g_engine.noteOn(id,
+                  g_shakePhrase.phrase.note[i].cents +
+                      g_shakePhrase.transpose,
+                  g_shakePhrase.velocity * (i == 0 ? 1.0f : 0.88f));
   g_engine.setParam(Param::EnvAttack, timbrePreset(ui.preset).attack);
-  const double hold = 2.0 + 2.5 * (double)rnd01f();
-  schedule(hold, [id] { g_engine.noteOff(id); });
-  printf("\n  ~ duch: %+.0f c\n", (double)cents);
+  if (g_shakeOffCount < (int)(sizeof g_shakeOffs / sizeof g_shakeOffs[0]))
+    g_shakeOffs[g_shakeOffCount++] = {now + 0.42, id};
+
+  ++g_shakePhrase.pos;
+  if (g_shakePhrase.pos >= g_shakePhrase.phrase.count) {
+    g_shakePhrase.active = false;
+  } else {
+    const uint16_t gap =
+        replayGapMs(g_shakePhrase.phrase.note[g_shakePhrase.pos].gapMs);
+    g_shakePhrase.nextAt = now + gap * 0.001;
+  }
+}
+
+void gardenShake(const Ui& ui, float dir) {
+  const double now = nowSec();
+  g_playedThisSession = true;
+  g_garden.lastInput = now;
+  gardenSilenceGhosts();
+  if (g_shakePhrase.active) return;  // let the remembered sentence finish
+  gardenSilenceShake();              // release the previous sentence's tail
+
+  GardenPhrase phrase;
+  float transpose = 0.0f;
+  if (selectGardenPhrase(&phrase)) {
+    const float r = rnd01f();
+    if (r >= 0.78f)
+      transpose = dir >= 0.0f ? (r < 0.92f ? 1200.0f : 702.0f)
+                              : (r < 0.92f ? -498.0f : -1200.0f);
+  } else {
+    const int hi = 2 * scaleStepsPerOctave((ScaleId)ui.scale);
+    g_shakeStep += dir >= 0.0f ? 1 : -1;
+    g_shakeStep = std::max(1, std::min(g_shakeStep, hi - 1));
+    phrase.count = 1;
+    phrase.note[0] = {
+        scaleStepCents((ScaleId)ui.scale, g_shakeStep), 0};
+  }
+  g_shakePhrase.phrase = phrase;
+  g_shakePhrase.pos = 0;
+  g_shakePhrase.nextAt = now;
+  g_shakePhrase.transpose = transpose;
+  g_shakePhrase.velocity = 0.70f;
+  g_shakePhrase.active = true;
+  printf("\n  >> wiatr wspomnien: %d nut, kierunek %s\n", phrase.count,
+         dir >= 0.0f ? "w gore" : "w dol");
+  shakePhraseTick(ui, now);
 }
 
 const char* loopStateName(Looper::State s) {
@@ -751,8 +895,6 @@ void printStatus(const Ui& ui) {
            (float)g_looper.lengthFrames() / kSr,
            g_looper.playbackLevel() * 100.0f);
   }
-  if (g_earOpen.load(std::memory_order_relaxed)) printf(" UCHO");
-  if (g_duetOn.load(std::memory_order_relaxed)) printf(" DUET");
   if (g_pulse.ticking)
     printf(" puls:%d", (int)(60.0 / g_pulse.period + 0.5));
   if (g_harmony) printf(" harm:ON");
@@ -773,122 +915,10 @@ void printStatus(const Ui& ui) {
 }
 
 void allOff() {
+  gardenSilenceGhosts();
+  gardenSilenceShake();
   g_engine.allNotesOff();
   for (auto& n : g_notes) n = NoteState{};
-}
-
-// --- the DUET: while you sing into the ear, the box hums along ---
-// Live pitch tracking on the incoming voice; a single companion synth voice
-// (soft PURE hum) slides legato to a consonant scale tone BELOW the singer
-// (a third/sixth in PENTA/MAJOR). The human voice is never touched — the
-// box becomes the second singer, not an imitation.
-struct Duet {
-  uint32_t analyzed = 0;  // capture samples already consumed
-  int stable = 0;
-  int silent = 0;
-  float lastCents = 1e9f;
-  float companion = 1e9f;
-};
-Duet g_duet;
-constexpr int32_t kDuetId = 1400;
-
-float duetSnapToGrid(const Ui& ui, float cents) {
-  float best = 0.0f, bestD = 1e9f;
-  for (int row = 0; row < kGridRows; ++row)
-    for (int col = 0; col < kGridCols; ++col) {
-      const float c = gridToCents((ScaleId)ui.scale, col, row);
-      const float d = fabsf(c - cents);
-      if (d < bestD) {
-        bestD = d;
-        best = c;
-      }
-    }
-  return best;
-}
-
-void duetHumOff() {
-  if (g_duetOn.load(std::memory_order_relaxed)) g_engine.noteOff(kDuetId);
-  g_duetOn.store(false);
-  g_duet.stable = 0;
-  g_duet.companion = 1e9f;
-}
-
-void duetTick(const Ui& ui) {
-  if (!g_earOpen.load(std::memory_order_relaxed)) return;
-  const uint32_t n = g_capCount.load(std::memory_order_acquire);
-  if (n < 1024 || n < g_duet.analyzed + 1024) return;  // wait for fresh audio
-  g_duet.analyzed = n;
-  // copy the freshest 1024 samples out of the ring into a straight window
-  float w[1024];
-  const uint32_t start = n - 1024;
-  for (int i = 0; i < 1024; ++i)
-    w[i] = g_capBuf[(start + (uint32_t)i) % kCapMax];
-
-  double e0 = 0.0;
-  for (int i = 0; i < 1024; ++i) e0 += (double)w[i] * (double)w[i];
-  bool voiced = false;
-  float hz = 0.0f;
-  if (sqrt(e0 / 1024.0) > 0.015) {  // gentle gate — singing from a distance
-    double acAll[601];
-    double best = 0.0;
-    for (int lag = 80; lag <= 600; ++lag) {
-      double ac = 0.0;
-      for (int i = 0; i + lag < 1024; i += 2)
-        ac += (double)w[i] * (double)w[i + lag];
-      acAll[lag] = ac;
-      if (ac > best) best = ac;
-    }
-    int bestLag = 0;
-    for (int lag = 80; lag <= 600; ++lag)
-      if (acAll[lag] >= 0.90 * best) {
-        bestLag = lag;
-        break;
-      }
-    const double clarity = e0 > 0.0 ? best / e0 : 0.0;
-    if (clarity > 0.30 && bestLag > 0) {
-      voiced = true;
-      hz = (float)kSr / (float)bestLag;
-    }
-  }
-
-  if (!voiced) {
-    // consonants and breaths are not the end of the song: bow out only
-    // after ~300 ms of true silence (analysis ticks every ~21 ms)
-    if (g_duetOn.load(std::memory_order_relaxed) && ++g_duet.silent >= 14)
-      duetHumOff();
-    return;
-  }
-  g_duet.silent = 0;
-  const float root =
-      kBaseOctaves[ui.octave] * exp2f(g_sim.centerCents / 1200.0f);
-  float cents = 1200.0f * log2f(hz / root);
-  // octave-jitter guard: if the detector flipped a whole octave between
-  // ticks, fold the new reading back to the previous register
-  if (g_duet.lastCents < 1e8f) {
-    const float d = cents - g_duet.lastCents;
-    if (fabsf(fabsf(d) - 1200.0f) < 90.0f)
-      cents -= copysignf(1200.0f, d);
-  }
-  if (fabsf(cents - g_duet.lastCents) < 80.0f) ++g_duet.stable;
-  else g_duet.stable = 1;
-  g_duet.lastCents = cents;
-  if (g_duet.stable < 2) return;  // vibrato-tolerant, blip-resistant
-
-  const float snapped = duetSnapToGrid(ui, cents);
-  float comp = duetSnapToGrid(ui, snapped - 350.0f);  // aim a third below
-  if (fabsf(comp - snapped) < 30.0f)
-    comp = duetSnapToGrid(ui, snapped - 550.0f);  // fall back to a fourthish
-  if (!g_duetOn.load(std::memory_order_relaxed) ||
-      fabsf(comp - g_duet.companion) > 25.0f) {
-    // legato companion: same id + glide + a soft PURE hum via FIFO sandwich
-    g_engine.setParam(Param::TimbrePreset, 0.0f);
-    g_engine.setParam(Param::GlideSec, 0.08f);
-    g_engine.noteOn(kDuetId, comp, 0.30f);
-    g_engine.setParam(Param::GlideSec, 0.0f);
-    g_engine.setParam(Param::TimbrePreset, (float)g_uiPreset);
-    g_duet.companion = comp;
-    g_duetOn.store(true);
-  }
 }
 
 // --- the soul: grajek remembers you across sessions ---
@@ -898,22 +928,36 @@ void duetTick(const Ui& ui) {
 const char* kSoulPath = "grajek_soul.txt";
 
 void soulSave(const Ui& ui) {
-  FILE* f = fopen(kSoulPath, "w");
-  if (!f) return;
-  fprintf(f, "grajek-soul 1\n");
-  fprintf(f, "scale %d preset %d octave %d wet %.3f\n", ui.scale, ui.preset,
-          ui.octave, (double)ui.wetBase);
-  fprintf(f, "bg %d %d", g_bgCustom ? 1 : 0, g_bgCount);
-  for (int i = 0; i < g_bgCount; ++i)
-    fprintf(f, " %.2f", (double)g_bg[i].cents);
-  fprintf(f, "\ngarden %d", g_garden.count);
-  for (int i = 0; i < g_garden.count; ++i) {
-    const int idx = (g_garden.head - g_garden.count + i +
-                     2 * GhostGarden::kCap) % GhostGarden::kCap;
-    fprintf(f, " %.2f", (double)g_garden.ring[idx].cents);
+  // Unique same-directory temp: concurrent players may race, but each rename
+  // still installs one whole snapshot rather than sharing a writable inode.
+  char tmpPath[] = "grajek_soul.txt.tmp.XXXXXX";
+  const int tmpFd = mkstemp(tmpPath);
+  FILE* f = tmpFd >= 0 ? fdopen(tmpFd, "w") : nullptr;
+  if (!f) {
+    if (tmpFd >= 0) close(tmpFd);
+    unlink(tmpPath);
+    fprintf(stderr, "Nie moge zapisac tymczasowej duszy.\n");
+    return;
   }
-  fprintf(f, "\n");
-  fclose(f);
+  bool ok = fprintf(f, "grajek-soul 2\n") >= 0;
+  ok = fprintf(f, "scale %d preset %d octave %d wet %.3f\n", ui.scale,
+               ui.preset, ui.octave, (double)ui.wetBase) >= 0 && ok;
+  ok = fprintf(f, "bg %d %d", g_bgCustom ? 1 : 0, g_bgCount) >= 0 && ok;
+  for (int i = 0; i < g_bgCount; ++i)
+    ok = fprintf(f, " %.2f", (double)g_bg[i].cents) >= 0 && ok;
+  ok = fprintf(f, "\ngarden %d", g_garden.count) >= 0 && ok;
+  for (int i = 0; i < g_garden.count; ++i) {
+    const GhostGarden::Mem& m = gardenMemoryAt(i);
+    ok = fprintf(f, " %.2f %u %d", (double)m.cents, (unsigned)m.gapMs,
+                 m.phraseStart ? 1 : 0) >= 0 && ok;
+  }
+  ok = fprintf(f, "\n") >= 0 && ok;
+  ok = fflush(f) == 0 && ok;
+  ok = fsync(fileno(f)) == 0 && ok;
+  ok = fclose(f) == 0 && ok;
+  if (ok && rename(tmpPath, kSoulPath) == 0) return;
+  unlink(tmpPath);
+  fprintf(stderr, "Nie udalo sie bezpiecznie zapisac duszy.\n");
 }
 
 bool soulLoad(Ui& ui) {
@@ -923,41 +967,66 @@ bool soulLoad(Ui& ui) {
   char tag[32];
   int ver = 0, scale = 0, preset = 0, octave = 0, bgCustom = 0, bgCount = 0;
   float wet = 0.35f;
+  Ui loadedUi = ui;
+  BgNote loadedBg[4] = {};
+  GhostGarden::Mem loadedGarden[GhostGarden::kCap] = {};
+  int loadedGardenCount = 0;
   if (fscanf(f, "%31s %d", tag, &ver) == 2 &&
-      strcmp(tag, "grajek-soul") == 0 && ver == 1 &&
+      strcmp(tag, "grajek-soul") == 0 && ver == 2 &&
       fscanf(f, " scale %d preset %d octave %d wet %f", &scale, &preset,
              &octave, &wet) == 4 &&
-      fscanf(f, " bg %d %d", &bgCustom, &bgCount) == 2 && bgCount >= 0 &&
-      bgCount <= 4) {
-    if (scale >= 0 && scale < (int)ScaleId::Count) ui.scale = scale;
-    if (preset >= 0 && preset < kNumTimbrePresets) ui.preset = preset;
-    if (octave >= 0 && octave < 4) ui.octave = octave;
-    ui.wetBase = clampf(wet, 0.0f, 0.6f);
-    int n = 0;
-    for (int i = 0; i < bgCount; ++i) {
-      float c;
-      if (fscanf(f, " %f", &c) == 1) g_bg[n++] = {c, 1000 + i};
+      fscanf(f, " bg %d %d", &bgCustom, &bgCount) == 2 &&
+      scale >= 0 && scale < (int)ScaleId::Count && preset >= 0 &&
+      preset < kNumTimbrePresets && octave >= 0 && octave < 4 &&
+      std::isfinite(wet) && wet >= 0.0f && wet <= 0.6f &&
+      (bgCustom == 0 || bgCustom == 1) && bgCount >= 0 && bgCount <= 4) {
+    bool bgOk = true;
+    for (int i = 0; bgOk && i < bgCount; ++i) {
+      float cents = 0.0f;
+      bgOk = fscanf(f, " %f", &cents) == 1 && std::isfinite(cents);
+      if (bgOk) loadedBg[i] = {cents, 1000 + i};
     }
-    g_bgCount = n;
-    g_bgNextId = n;
-    g_bgCustom = bgCustom != 0;
-    int gc = 0;
-    if (fscanf(f, " garden %d", &gc) == 1 && gc > 0 &&
-        gc <= GhostGarden::kCap) {
-      int m = 0;
-      float c;
-      while (m < gc && fscanf(f, " %f", &c) == 1)
-        g_garden.ring[m++] = {c, nowSec()};
-      g_garden.count = m;
-      g_garden.head = m % GhostGarden::kCap;
+    int gc = -1;
+    bool gardenOk = bgOk && fscanf(f, " garden %d", &gc) == 1 && gc >= 0 &&
+                    gc <= GhostGarden::kCap;
+    for (int i = 0; gardenOk && i < gc; ++i) {
+      float cents = 0.0f;
+      unsigned gap = 0;
+      int starts = 0;
+      gardenOk = fscanf(f, " %f %u %d", &cents, &gap, &starts) == 3 &&
+                 std::isfinite(cents) && gap <= 1499 &&
+                 (starts == 0 || starts == 1) && (i != 0 || starts == 1);
+      if (gardenOk) {
+        const bool phraseStart = starts != 0;
+        loadedGarden[i] = {cents,
+                           phraseStart ? (uint16_t)0 : (uint16_t)gap,
+                           phraseStart};
+      }
     }
-    // legacy field from the removed age dial: read and discard, so souls
-    // written by older builds still load cleanly
-    int a = 2;
-    (void)fscanf(f, " age %d", &a);
-    ok = true;
+    if (gardenOk) {
+      loadedUi.scale = scale;
+      loadedUi.preset = preset;
+      loadedUi.octave = octave;
+      loadedUi.wetBase = wet;
+      loadedGardenCount = gc;
+      ok = true;
+    }
   }
   fclose(f);
+  if (ok) {
+    ui = loadedUi;
+    for (int i = 0; i < bgCount; ++i) g_bg[i] = loadedBg[i];
+    for (int i = bgCount; i < 4; ++i) g_bg[i] = {0.0f, -1};
+    g_bgCount = bgCount;
+    g_bgNextId = bgCount;
+    g_bgCustom = bgCustom != 0;
+    for (int i = 0; i < loadedGardenCount; ++i)
+      g_garden.ring[i] = loadedGarden[i];
+    g_garden.count = loadedGardenCount;
+    g_garden.head = loadedGardenCount % GhostGarden::kCap;
+    g_garden.haveLiveOnset = false;
+    g_garden.captureNotes = 0;
+  }
   return ok;
 }
 
@@ -1046,86 +1115,6 @@ void fumble() {
          wasFlying ? " W LOCIE" : "");
 }
 
-// Measured verification of the ear, no singing required:
-//  A) injection path — a synthetic "voice" is pushed into the mic ring with
-//     the input DEVICE off; the session recorder measures the output: the
-//     voice must appear in the mix and must RETURN from the tape ~4 s later
-//  B) real hardware — the input queue is opened and we count whether the
-//     microphone actually delivers samples (permissions, device presence)
-int eartest() {
-  AudioQueueRef queue = nullptr;
-  if (!audioStart(&queue)) {
-    fprintf(stderr, "eartest: failed to open CoreAudio output\n");
-    return 1;
-  }
-  g_recIdx.store(0);
-  g_recOn.store(true);
-
-  auto rmsWindow = [&](uint32_t from, uint32_t to) {
-    const uint32_t end = g_recIdx.load() < to ? g_recIdx.load() : to;
-    double s = 0.0;
-    uint32_t n = 0;
-    for (uint32_t i = from; i < end && g_recBuf; ++i) {
-      const double v = (double)(*g_recBuf)[i] / 32768.0;
-      s += v * v;
-      ++n;
-    }
-    return n ? sqrt(s / (double)n) : 0.0;
-  };
-
-  // A) chain loopback
-  sleepMs(1000);  // baseline (no background applied in test mode: ~silence)
-  const uint32_t aEnd = g_recIdx.load();
-  g_earOpen.store(true);  // ear open, hardware input NOT started
-  float phase = 0.0f;
-  for (int chunk = 0; chunk < 50; ++chunk) {  // ~1 s of 440 Hz at voice level
-    float vb[1024];
-    for (int i = 0; i < 1024; ++i) {
-      vb[i] = 0.5f * sinf(phase);
-      phase += 2.0f * 3.14159265f * 440.0f / (float)kSr;
-    }
-    micPush(vb, 1024);
-    sleepMs(20);
-  }
-  g_earOpen.store(false);
-  const uint32_t bEnd = g_recIdx.load();
-  sleepMs(3600);  // wait for the tape to come back (4 s loop)
-  const uint32_t cStart = g_recIdx.load();
-  sleepMs(1200);
-  g_recOn.store(false);
-
-  const double baseline = rmsWindow(kSr / 2, aEnd);
-  const double voiced = rmsWindow(aEnd + kSr / 4, bEnd);
-  const double returned = rmsWindow(cStart, g_recIdx.load());
-  const bool okA = voiced > 0.02 && voiced > baseline * 3.0 &&
-                   returned > 0.003 && returned > baseline * 1.5;
-  printf("eartest A (tor iniekcji): baseline %.4f | glos %.4f |"
-         " powrot z tasmy %.4f -> %s\n",
-         baseline, voiced, returned,
-         okA ? "DZIALA" : "PROBLEM");
-
-  // B) real microphone — TWO open/close cycles, because a reused queue used
-  // to go deaf from the second opening on
-  bool okB = true;
-  for (int cycle = 1; cycle <= 2; ++cycle) {
-    const bool opened = earOpen();  // resets the ring counters
-    const uint32_t h0 = g_micHead.load();
-    sleepMs(1500);
-    const uint32_t got = g_micHead.load() - h0;
-    earClose();
-    printf("eartest B cykl %d: wejscie %s, probek z mikrofonu: %u %s\n",
-           cycle, opened ? "otwarte" : "NIE otwarte", got,
-           got > 0 ? "(plynie)" : "(GLUCHE)");
-    okB = okB && opened && got > 0;
-    sleepMs(300);
-  }
-  printf("eartest B -> %s\n", okB ? "DZIALA (oba cykle)" : "PROBLEM");
-
-  AudioQueueStop(queue, true);
-  AudioQueueDispose(queue, true);
-  return okA ? 0 : 1;
-}
-
 int selftest() {
   AudioQueueRef queue = nullptr;
   if (!audioStart(&queue)) {
@@ -1142,9 +1131,63 @@ int selftest() {
   return 0;
 }
 
+int gardenSelftest() {
+  int failed = 0;
+  auto expect = [&](bool condition, const char* what) {
+    if (!condition) {
+      fprintf(stderr, "garden-test: FAIL: %s\n", what);
+      ++failed;
+    }
+  };
+
+  g_garden = GhostGarden{};
+  g_garden.ring[0] = {0.0f, 0, true};
+  g_garden.ring[1] = {200.0f, 120, false};
+  g_garden.ring[2] = {400.0f, 0, false};  // a chord stays in one phrase
+  g_garden.ring[3] = {700.0f, 0, true};
+  g_garden.ring[4] = {900.0f, 330, false};
+  g_garden.head = 5;
+  g_garden.count = 5;
+  GardenPhrase phrase;
+  expect(phraseAtAnchor(&phrase, 1), "select phrase at middle note");
+  expect(phrase.count == 3, "phrase boundaries include exactly 3 notes");
+  expect(phrase.note[1].gapMs == 120 && phrase.note[2].gapMs == 0,
+         "phrase preserves timing and chord gap");
+  expect(phraseAtAnchor(&phrase, 4) && phrase.count == 2,
+         "second phrase remains separate");
+  expect(replayGapMs(0) == 70 && replayGapMs(240) == 240 &&
+             replayGapMs(1499) == 1200,
+         "replay timing clamps only inaudible/long extremes");
+
+  g_garden = GhostGarden{};
+  gardenPush(0.0f);
+  expect(gardenMemoryAt(0).phraseStart, "first onset starts a phrase");
+  g_garden.lastOnset = nowSec() - 2.0;
+  gardenPush(200.0f);
+  expect(gardenMemoryAt(1).phraseStart,
+         "a 1.5 s pause starts a fresh phrase");
+  g_garden.captureNotes = kGardenPhraseMax;
+  g_garden.lastOnset = nowSec();
+  gardenPush(400.0f);
+  expect(gardenMemoryAt(2).phraseStart,
+         "the seventh onset starts a bounded phrase");
+
+  g_garden = GhostGarden{};
+  for (int i = 0; i <= GhostGarden::kCap; ++i) gardenPush((float)i);
+  expect(g_garden.count == GhostGarden::kCap,
+         "garden remains at fixed ring capacity");
+  expect(gardenMemoryAt(0).phraseStart && gardenMemoryAt(0).gapMs == 0,
+         "ring overwrite repairs the new oldest phrase boundary");
+
+  if (failed == 0) printf("garden-test ok — boundaries, timing, ring wrap\n");
+  return failed == 0 ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc > 1 && strcmp(argv[1], "--garden-test") == 0)
+    return gardenSelftest();
   srand((unsigned)time(nullptr));
   g_engine.init(kSr);
   g_engine.setParam(Param::TimbrePreset, 3);  // CHIME
@@ -1178,8 +1221,6 @@ int main(int argc, char** argv) {
   g_echo.setLevel(0.5f);
 
   if (argc > 1 && strcmp(argv[1], "--selftest") == 0) return selftest();
-  if (argc > 1 && strcmp(argv[1], "--eartest") == 0) return eartest();
-
   if (!isatty(STDIN_FILENO)) {
     fprintf(stderr, "grajek_live needs a terminal (tty). Run without a pipe.\n");
     return 1;
@@ -1215,8 +1256,9 @@ int main(int argc, char** argv) {
   printf("  arrows <- -> bend | up/down filter | ENTER panic+re-center | ESC quit\n");
   printf("  FREEZE: SHIFT+F — to co teraz slychac staje sie PODLOGA (petla\n"
          "          wstecz z pamieci echa; lata z rzutami, SHIFT+U cofa)\n");
-  printf("  DUCHY:  po ~7 s ciszy pudelko cicho dosiewa twoje wlasne nuty;\n"
-         "          pierwszy klawisz je ucisza | SHIFT+W nagrywa sesje do WAV\n");
+  printf("  OGROD:  po ~7 s ciszy pudelko dosiewa twoje krotkie frazy z rytmem;\n"
+         "          SHIFT+, / SHIFT+. strzasa fraze w dol / w gore; pierwszy\n"
+         "          klawisz ucisza wspomnienie | SHIFT+W nagrywa sesje do WAV\n");
   printf("  TLO:    SHIFT+D i klikasz nuty = wybierasz wlasny dron pod spodem\n"
          "          (max 4, klik drugi raz usuwa) | SHIFT+S struny sympatyczne\n");
   printf("  SHIFT+H cien harmoniczny (rzad wyzej gra cicho z toba — w PENTA\n"
@@ -1224,11 +1266,6 @@ int main(int argc, char** argv) {
   printf("  PULS:   graj rowno kilka nut, a dolaczy serce grajace ARPEGGIO\n"
          "          TWOJEGO TLA w twoim tempie; plynie za toba (tez na\n"
          "          polnuty/osemki), a gdy przestajesz — samo puszcza\n");
-  printf("  UCHO:   TRZYMAJ SHIFT+M i spiewaj — pudelko CICHO NUCI POD TOBA\n"
-         "          czysty interwal (DUET, slizga sie legato za glosem); po\n"
-         "          puszczeniu ODPOWIADA — glos wraca z tasmy, strun i\n"
-         "          poglosu; mikrofon dziala TYLKO gdy trzymasz, nic nie\n"
-         "          jest zapisywane\n");
   printf("  LOOPER (zaawansowane): SHIFT+R rec/close/overdub | SHIFT+P"
          " play/stop\n"
          "          SHIFT+U undo | SHIFT+C clear | SHIFT+[ ] volume"
@@ -1254,6 +1291,7 @@ int main(int argc, char** argv) {
     if (g_garden.count > 0) {
       // it greets you with one of your own notes from last time
       schedule(2.5, [&ui] {
+        if (g_playedThisSession || g_garden.count == 0) return;
         const int last =
             (g_garden.head - 1 + GhostGarden::kCap) % GhostGarden::kCap;
         g_engine.setParam(Param::EnvAttack, 1.0f);
@@ -1302,6 +1340,8 @@ int main(int argc, char** argv) {
         } else {
           land(ui);
         }
+      } else if (c == '<' || c == '>') {
+        gardenShake(ui, c == '>' ? 1.0f : -1.0f);
       } else if (c == 'X') {
         fumble();
       } else if (c == '\t') {
@@ -1318,27 +1358,13 @@ int main(int argc, char** argv) {
       } else if (c == 'L') {
         ui.latch = !ui.latch;
       } else if (c == 'B') {
-        // A/B the psychoacoustic bass (virtual pitch below ~250 Hz) by ear
+        // A/B the psychoacoustic bass (virtual pitch below ~250 Hz)
         static bool bassOn = true;
         bassOn = !bassOn;
         g_engine.setParam(Param::BassVoicing, bassOn ? 1.0f : 0.0f);
         printf("\n  >> bas psychoakustyczny: %s\n", bassOn ? "ON" : "off");
       } else if (c == 'H') {
         g_harmony = !g_harmony;
-      } else if (c == 'M') {
-        // hold-to-listen: auto-repeat keeps refreshing the deadline
-        g_earHeldUntil = nowSec() + 0.8;
-        // singing counts as presence: without this, ghosts sowed straight
-        // into the open microphone and the box duetted with itself
-        g_garden.lastInput = nowSec();
-        if (!g_earOpen.load(std::memory_order_relaxed)) {
-          if (earOpen()) {
-            g_duet = Duet{};  // fresh take, fresh tracking
-            printf("\n  >> UCHO otwarte — spiewaj, pudelko zanuci z toba\n");
-          } else {
-            printf("\n  >> nie moge otworzyc mikrofonu (uprawnienia?)\n");
-          }
-        }
       } else if (c == 'E') {
         g_echo.setEnabled(!g_echo.enabled());
       } else if (c == 'T') {
@@ -1412,6 +1438,8 @@ int main(int argc, char** argv) {
         g_looper.clear();
         g_echo.clearTape();
         g_pending.clear();
+        gardenSilenceGhosts();
+        gardenSilenceShake();
         g_sim.inFlight = false;
         g_sim.centerCents = 0.0f;
         g_sim.rateBase = 1.0f;
@@ -1441,6 +1469,7 @@ int main(int argc, char** argv) {
         // silence the ghosts, so waving the filter shooed them away)
         g_garden.lastInput = nowSec();
         gardenSilenceGhosts();
+        gardenSilenceShake();
         const int id = kp.row * 14 + kp.col;
         const float cents = gridToCents((ScaleId)ui.scale, kp.col, kp.row);
         if (g_pickMode) {
@@ -1489,19 +1518,11 @@ int main(int argc, char** argv) {
 
     if (g_sim.inFlight) flightUpdate(ui);
     runPending();
+    drainGardenOffs();
     weatherTick(ui);
+    shakePhraseTick(ui, nowSec());
     gardenTick(ui);
     pulseTick();
-    duetTick(ui);
-    if (g_earOpen.load(std::memory_order_relaxed) &&
-        nowSec() > g_earHeldUntil) {
-      earClose();
-      duetHumOff();
-      printf("\n  >> ucho zamkniete — sluchaj, jak wraca\n");
-      printStatus(ui);
-      lastStatusAt = nowSec();
-    }
-
     // keep the loop position / flight state on screen while idling
     const bool busy =
         g_sim.inFlight || g_looper.state() != Looper::State::Empty;
@@ -1523,6 +1544,8 @@ int main(int argc, char** argv) {
     sleepMs(8);  // ~125 Hz tick: smooth flight, negligible input latency
   }
 
+  gardenSilenceGhosts();
+  gardenSilenceShake();
   soulSave(ui);
   if (g_garden.count > 0) {
     // goodnight: it hums your last remembered note as it falls asleep
@@ -1536,7 +1559,6 @@ int main(int argc, char** argv) {
   }
   allOff();
   sleepMs(150);  // let the release tail ring before closing the queue
-  earClose();    // disposes the input queue if one exists
   AudioQueueStop(queue, true);
   AudioQueueDispose(queue, true);
   tcsetattr(STDIN_FILENO, TCSANOW, &orig);
