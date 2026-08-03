@@ -7,7 +7,7 @@ https://github.com/user-attachments/assets/ff5505d3-2069-4a1e-8fab-654272a3c69c
 
 You shake it, tilt it, click it — and something beautiful comes out.
 Under the toy there is a serious synthesis engine: just
-intonation in the spirit of Harry Partch, an aging tape loop, sympathetic
+intonation in the spirit of Harry Partch, aging tape memory, sympathetic
 string resonators, and a heartbeat that follows *your* tempo instead of
 imposing one.
 
@@ -21,28 +21,27 @@ the design laws that survived the process:
 1. **Impossible to play badly.** Pentatonic just intonation by default,
    equal-loudness key tracking, polyphony compensation, no failure states —
    any random key, any random pair of keys, sounds intentional.
-2. **Cat, not Furby.** The box never solicits play. Every sound traces back
-   to a human act: pick it up and it purrs, play and it remembers, leave it
-   and it goes quiet.
+2. **Cat, not Furby.** The box never solicits play. Switch it on and it purrs,
+   play and it remembers, lay it face-down and it goes quiet.
 3. **Tempo is discovered, not declared.** There is no BPM anywhere. Play a
    few even notes and a quiet heart joins in *your* time (a phase-locked
-   loop on your key presses); drift into rubato and it lets go.
+   loop on your key presses); pause and it lets go.
 4. **Discovery instead of configuration.** While playing, every grid key is
    music — there are no special keys among the playing keys. The default world
    (pentatonic + chimes) is safe for a toddler; deeper scales simply sit
    further down the settings list, ordered happy-to-strange, waiting for an
    older kid to find them. No age switch, no parent manual.
 5. **Memory is the soul.** At natural pauses it saves what you taught it —
-   your settings and short phrases with their timing — then greets you the
-   next day with one remembered note.
+   your settings and short phrases with their timing — then greets you on the
+   next boot with one remembered note.
 
 The gestures on top: **shake** the box and it rattles the child's own
-remembered phrases — every swing releases one short musical thought with
-the child's rhythm intact, the waving direction steers the occasional
-whole-phrase transposition up or down, and the swing energy sets the
-loudness; **tilt** it and everything darkens or brightens (slow and smooth,
-like turning the box away from the light); **lay it face-down** after
-playing and the day's phrases sing themselves to sleep.
+remembered phrases — a swing releases one short musical thought with the
+captured timing kept inside gentle playback-safe bounds; waving direction
+steers the occasional whole-phrase transposition up or down, and swing energy
+sets the loudness; **tilt** it and everything darkens or brightens (slow and
+smooth, like turning the box away from the light); **lay it face-down** after
+playing and the remembered garden sings itself to sleep.
 
 ## Status
 
@@ -50,21 +49,22 @@ playing and the day's phrases sing themselves to sleep.
   designed and measured — see below.
 - **Device firmware**: plays on real hardware — the whole chain is ported
   (engine → strings → lo-fi tape → reverb, ambient brain, IMU gestures)
-  with five visualization scenes and a menu-less UI. On top of that, all
-  on the device now: the **heart** (tempo entrainment — a PLL on your key
+  with five visualization scenes. It boots directly into play and has one
+  settings screen behind BtnGO, rather than a mode menu. Also on the device:
+  the **heart** (tempo entrainment — a PLL on your key
   presses), the **soul** (the memory garden and pulse are saved at natural
   pauses; the garden keeps phrase boundaries and timing, while the box still
   greets you with one remembered note), a
-  **WS2812 firefly** that flashes in the color of each note and dims with
-  the battery, the **goodnight lullaby** (lay it
+  **WS2812 firefly** that flashes in the color of foreground notes and dims
+  with the battery, the **goodnight lullaby** (lay it
   face-down), **psychoacoustic bass** voiced for the 3 cm speaker, the
   grid tuned to the *physical* keyboard stagger (4-T-F-C is one chord),
   and the EDO scales lifted an octave into the same register as the JI
   scales.
 - The shared garden, pulse, lullaby and background-preset models, both LCD
   languages, the scale registry and the hardware-independent face-down dwell
-  have host tests. Both firmware languages are also built end to end; device
-  integration still deserves a physical-device pass.
+  have host tests. The Polish and English firmware images are also verified
+  with separate end-to-end PlatformIO builds.
 
 ---
 
@@ -75,7 +75,7 @@ Priority: low latency and smooth sound — this is a live instrument.
 ```
 lib/grajek_audio/   synthesis engine — pure C++17, ZERO hardware dependencies
                     (sine-partial oscillators, ADSR, SVF filter,
-                     scales: 12/19/31-EDO + 11-limit just intonation,
+                     scales: pentatonic/major/11-limit JI, 12/19/31-EDO, WOLF,
                      lock-free event queue; the same code runs on the ESP32
                      and on a laptop)
 lib/grajek_core/    pure state models shared by device and host: phrase garden,
@@ -86,11 +86,12 @@ src/                ESP32 firmware (PlatformIO / Arduino core 3.x):
   input/            keyboard (TCA8418 polled over I2C) + BtnGO
   modes/            INSTRUMENT (play) and USTAWIENIA
   viz.cpp           five visualization scenes — same music, different worlds
-  pulse.cpp         the heart: tempo entrainment (a PLL on key presses)
+  ambient.cpp       device adapter for the garden, lullaby and background
+  pulse.cpp         device/audio adapter for the shared pulse tracker
   soul.cpp          what survives the power switch (garden/chord/pulse, NVS)
   firefly.cpp       the WS2812 firefly + battery dusk
   i18n.cpp          compile-time LCD text (Polish default, English variant)
-  settings.cpp      shared musical state (scale/timbre/octave/scene), in NVS
+  settings.cpp      scale/timbre/octave/background/scene state, in NVS
   main.cpp          main loop; boots straight into playing
 ```
 
@@ -104,36 +105,49 @@ make test        # shared state, registries, PL/EN text and face-down gesture
 afplay out/01_single_note.wav
 ```
 
-`grajek_live`: 4 laptop keyboard rows = 4 instrument grid rows (the bottom
+`grajek_live` requires macOS and the Xcode command-line tools. Its four laptop
+keyboard rows mirror the four instrument grid rows (the bottom
 `zxcv…` row plays lowest; a laptop row reaches 10–12 of the grid's 14
 columns — enough to design with, the device has all 14). A terminal has no
-key-up events, so a note fades 0.6 s after release (auto-repeat sustains
-it), and **SHIFT+L toggles LATCH mode**: a key press turns a note on
-permanently, a second press turns it off — that is how you build drones.
-`TAB` scale, `` ` `` timbre, `BACKSPACE` octave, `SHIFT+B` A/Bs the
-psychoacoustic bass, arrows = IMU stand-in (left/right bend, up/down
-filter), `SHIFT+,` / `SHIFT+.` shake one remembered phrase down / up,
-`ENTER` panic + re-center, `ESC` quit.
+key-up events, so a note fades 0.6 s after the last press or auto-repeat.
+
+| Keys | Action |
+|---|---|
+| grid keys | play; `SHIFT+L` toggles latch mode for held drones/chords |
+| `TAB` / `` ` `` / `BACKSPACE` | next scale / timbre / base octave |
+| arrows | IMU stand-in: left/right pitch bend, up/down filter |
+| `SHIFT+B` / `SHIFT+H` | psychoacoustic-bass A/B / harmonic shadow |
+| `SHIFT+E` / `SHIFT+V` | echo on/off / reverb dry → subtle → default → cathedral |
+| `SHIFT+T` / `SHIFT+S` | background on/off / sympathetic strings on/off |
+| `SHIFT+D`, then grid keys | pick a custom background chord (toggle up to 4 notes); `SHIFT+D` accepts it |
+| `SHIFT+,` / `SHIFT+.` | shake one remembered phrase down / up |
+| `SHIFT+W` | start/stop the final-mix recorder; writes `session_<timestamp>.wav` |
+| `ENTER` / `ESC` | panic + re-center (the loop keeps running) / quit |
+
+The live rig restores its scale, timbre, octave, room, custom background and
+phrase garden from `host/grajek_soul.txt` (created when you quit normally).
 
 **Toss simulator** (a laptop-only toy — on the device the throw gave way to
-the shake-rattle gesture): `SPACE` throws the whole music into a rising glissando
-(synth bend + loop varispeed together), arrows **during flight** add spin
+the shake-rattle gesture): `SPACE` throws the whole music into a rising
+glissando (synth bend + loop varispeed together), arrows **during flight** add spin
 (right = land upward/otonal, left = land downward/utonal; more spin = flight
 warble + a dizzy landing), `SPACE` again catches: flight time picks the rung
 of the JI ladder (9/8, 5/4, 3/2, 7/4, 2/1) and everything lands re-rooted on
 the new tonal center. `SHIFT+X` = fumble: a comic tape-dive stumble — the
 music trips and gets back up, nothing is lost.
 
-**Looper** (`lib/grajek_audio/src/ga_looper.*` — host-only for now, see the
-roadmap): `SHIFT+R` starts the first recording, pressed again it closes
-the loop and defines its length; from then on `SHIFT+R` toggles overdub
+**Looper** (`lib/grajek_audio/src/ga_looper.*` — host-only): `SHIFT+R` starts
+the first recording; pressed again, it closes the loop and defines its length.
+From then on `SHIFT+R` toggles overdub
 (each take commits one layer). `SHIFT+P` play/stop, `SHIFT+U` undo the
-last layer, `SHIFT+C` clear, `SHIFT+[` / `SHIFT+]` loop playback volume
+current overdub or last committed layer (8 levels), `SHIFT+C` clear,
+`SHIFT+[` / `SHIFT+]` loop playback volume
 (default 80% — leaves headroom to play over the loop). `SHIFT+F` freezes
 what you hear into a floor loop — and clears the echo tape only when the
 looper actually accepts the capture. Record a phrase, let it circle,
 layer on top — panic (`ENTER`) silences the synth but keeps the loop
-running. Ghosts wait 7 s of silence, same as the device.
+running. Ghosts become eligible after 7 s of silence, then return after a
+randomized pause, same as the device.
 
 The engine applies equal-power polyphony compensation (1/sqrt(voices),
 slowly smoothed), so a held chord sits at roughly the level of a single
@@ -141,13 +155,16 @@ note instead of squashing into the clipper.
 
 ## Flashing the Cardputer-ADV
 
-PlatformIO lives in a project-local uv environment (`.venv`, gitignored):
+PlatformIO lives in a project-local uv environment (`.venv`, gitignored).
+You need `uv` and a data-capable USB cable:
 
 ```bash
 uv venv .venv
 uv pip install --python .venv/bin/python platformio==6.1.19 pip==26.2 pyyaml==6.0.3  # once
-.venv/bin/pio run -e cardputer-adv -t upload     # Polish (default)
-.venv/bin/pio run -e cardputer-adv-en -t upload  # English
+.venv/bin/pio run -e cardputer-adv               # build Polish (default)
+.venv/bin/pio run -e cardputer-adv-en            # build English
+.venv/bin/pio run -e cardputer-adv -t upload     # upload Polish
+.venv/bin/pio run -e cardputer-adv-en -t upload  # OR upload English
 .venv/bin/pio device monitor
 ```
 
@@ -157,12 +174,13 @@ is selected only while compiling: `cardputer-adv` is Polish and
 `cardputer-adv-en` is English. It does not add a language setting or alter the
 saved NVS format.
 
-### Playing it: there is no menu
+### Playing it: straight to the instrument
 
-The box **boots straight into playing**. In INSTRUMENT all 56 keys are music:
-column = scale step, bottom row = the lowest interval, and no playing key is
-special. USTAWIENIA is the deliberate exception: digits 1–5 change its five
-rows; any keyboard key can still wake the box.
+The box **boots straight into playing**: there is no mode picker or setup
+wizard. In INSTRUMENT all 56 keys are music: column = scale step, bottom row =
+the lowest interval, and the digit row follows the keyboard's physical
+one-column stagger. USTAWIENIA is the deliberate exception: digits 1–5 change
+its five rows; every other keyboard key only wakes the box.
 
 Everything else hangs off the one side button:
 
@@ -170,18 +188,19 @@ Everything else hangs off the one side button:
 |---|---|
 | any key while playing | plays (column = scale step, bottom row = lowest) |
 | **short BtnGO** | toggles playing ⇄ settings screen |
-| **hold BtnGO** | next timbre (repeats every 0.7 s, the name flashes) |
-| **shake** | the *wind of memories* — each swing plays one short remembered phrase with its original rhythm; the waving direction steers an occasional whole-phrase transposition up or down |
+| **hold BtnGO while playing** | next timbre (repeats every 0.7 s, the name flashes) |
+| **shake** | the *wind of memories* — when no replay is active, a swing starts one short remembered phrase with bounded captured timing; an empty garden answers with one safe note, and waving direction steers an occasional whole-phrase transposition up or down |
 | **tilt sideways** | brightness: darkens or opens the sound (filter) |
 | **tilt toward / away** | depth: the sound moves into the reverb and echo, or comes close and dry |
-| **lay face-down** (after playing) | goodnight: the screen and firefly switch off, then the day's phrases replay as a quiet, slowing lullaby — lifting the box, BtnGO or any keyboard key wakes it instantly |
+| **lay face-down** (after playing) | goodnight: the screen and firefly switch off, then recent remembered phrases replay as a quiet, slowing lullaby — lifting the box, BtnGO or any keyboard key wakes it instantly |
 
 The settings screen (short BtnGO) has five rows, each cycled by its digit
 and persisted in NVS: **scale** (ordered happy → strange: pentatonic JI,
 just major, 12-EDO, 19-EDO, 31-EDO, 11-limit Partch, WOLF), **timbre**,
-**octave**, **background layer** (off → root → the breathing fifth drone → a
-root/fifth/harmonic-seventh halo; shown in Polish as *cisza / fundament /
-dron / aureola*), and
+**octave**, **background layer** (off → root → a breathing two-note drone whose
+upper voice moves between fifth and harmonic seventh → a fixed
+root/fifth/harmonic-seventh halo; the Polish labels are *cisza*, *fundament*,
+*dron* and *aureola*), and
 **visualization scene**.
 
 Two design laws are enforced here rather than explained: the shake plays
@@ -195,16 +214,16 @@ jerks the filter and a child's unsteady hands do not wobble the sound.
 The same notes, memories and gestures drive five scenes that differ in
 *composition and motion*, not decoration:
 
-- **laka** (meadow) — fireflies over grass; a note that ends drifts down
+- **laka / meadow** — fireflies over grass; a note that ends drifts down
   and stays as a glowing seed. **This is the ghost garden made visible**:
   after a silence, remembered phrases wake their seeds in sequence.
-- **kosmos** — radial: notes **orbit** a pulsing core (higher = further and
-  faster), memories are stars in an outer ring; sideways tilt spins the
+- **kosmos / cosmos** — radial: notes **orbit** a pulsing core (higher = further
+  and faster), memories are stars in an outer ring; sideways tilt spins the
   whole system, depth tilt flattens the orbital plane.
 - **ocean** — flow: fish **swim across** the screen and wrap around, light
   shafts lean with the tilt, memories sink to the sand as pearls, the
   shake sends bubbles up.
-- **ognie** (fireworks) — expansion: each note **blooms as a growing ring**
+- **ognie / fireworks** — expansion: each note **blooms as a growing ring**
   and falls back as embers; near-empty sky, all attention on the notes.
 - **mandala** — abstraction: sounding notes form a symmetric rotating
   pattern; depth tilt changes the symmetry from 4 to 9 arms.
@@ -216,16 +235,16 @@ Same portable modules as the host: engine → sympathetic strings → echo tape
 loves the darkening anyway) → reverb → speaker voicing (a 180 Hz high-pass
 plus a gentle presence shelf: the membrane is never asked for air it cannot
 move, while the engine's **virtual-pitch bass** shifts each low note's
-fundamental energy into partials that reconstruct the perceived bass) → a
-hard output ceiling. The ambient brain (background chord, weather, ghost
-garden) runs from boot. Still deferred: the FREEZE/looper floor (RAM audit
-on real hardware first).
+fundamental energy into partials that reconstruct the perceived bass when the
+timbre's partial structure permits it) → a hard output ceiling. The ambient
+brain (background chord, weather, ghost
+garden) runs from boot.
 
 ## Hardware — facts verified against official sources
 
 Sources: M5Unified, M5GFX (ADV autodetect), M5Cardputer-UserDemo
 (branch `CardputerADV`), schematic `Sch_M5CardputerAdv_v1.0`. Details and
-quotes in `src/hal/board_pins.h`.
+source notes are in `src/hal/board_pins.h`.
 
 | Part | Configuration |
 |---|---|
@@ -236,7 +255,7 @@ quotes in `src/hal/board_pins.h`.
 | LCD ST7789 | handled by M5GFX autodetect; backlight = **G38** |
 | Power | mechanical slide switch — **there is no power-hold pin** (G38 is NOT power!) |
 | IR / LED / SD | IR TX=G44, WS2812=G21, SD CS=G12 (SPI G40/G14/G39), battery ADC=G10 |
-| EXT (LoRa cap) | CS=G5, RST=G3, BUSY=G6, DIO1=G4, SPI shared with SD; GPS UART: RX=G15, TX=G13 |
+| EXT header | CS=G5, RST=G3, BUSY=G6, DIO1=G4, SPI shared with SD; UART: RX=G15, TX=G13 |
 
 ## Architecture decisions
 
@@ -246,16 +265,21 @@ quotes in `src/hal/board_pins.h`.
   the official M5Unified Cardputer-ADV playback callback.
 - The engine never allocates after `init()` and is controlled exclusively
   through an SPSC queue — no mutexes anywhere near the audio path.
+- **A fixed compile-time audio path, not ESP-GMF.** This instrument has
+  one small real-time chain and its own low-latency I2S endpoint; a graph
+  framework would add lifecycle and integration surface without
+  improving the current signal flow.
 - **The keyboard is polled, not interrupt-driven.** M5Cardputer's TCA8418
   reader can wedge (INT low with the flag already cleared → the keyboard
   goes dead while the rest of the box keeps humming, which is exactly how
   it failed in a child's hands). We read the controller's event FIFO over
   I2C every pass instead, and do not call `M5Cardputer.update()` at all so
   nothing else drains that FIFO.
-- Isomorphic grid: column = +1 scale step, row ≈ a fourth (EDO) or +octave
-  (JI); the geometry follows from the scale (`ga_scales.cpp`). Two facts
-  of physics are compensated in the mapping: the EDO grids are lifted one
-  octave (fourth-stacked rows span far less than octave rows, so without
+- Isomorphic grid: column = +1 scale step; rows move by two scale steps in
+  PENTA/MAJOR JI, roughly a fourth in EDO, one octave in 11-limit JI, and
+  637 cents in WOLF. The geometry follows from the scale (`ga_scales.cpp`).
+  Two facts of physics are compensated in the mapping: the EDO grids are
+  lifted one octave (fourth-stacked rows span far less than octave rows, so without
   the lift switching PENTA → EDO dropped the whole keyboard by over an
   octave), and the digit row maps to `col+1` because the physical top row
   is staggered one key to the right — the column the **eye** sees
@@ -270,45 +294,48 @@ quotes in `src/hal/board_pins.h`.
 
 ## What to check after flashing
 
-1. It boots **playing** (a quiet drone) and every key sounds. If rows come
-   out upside down, swap `3 - row` in `mode_instrument.cpp`.
+1. With fresh NVS it boots **playing** with PENTA JI, CHIME, 220 Hz, the quiet
+   drone and meadow. Otherwise it restores the saved background and other
+   settings. Every key sounds; if rows come out upside down, swap `3 - row`
+   in `mode_instrument.cpp`.
 2. Keys stay clean **with no clicks/dropouts** while the UI is stressed —
    hold several keys, shake, switch scenes.
 3. Short BtnGO opens settings and returns; holding it while playing cycles
    the timbre; background cycles through silence, root, drone and halo; every
    choice survives a power cycle (NVS). Old boolean background settings migrate
    to silence or the original drone.
-4. Shaking replays one remembered phrase per swing (with the captured
-   rhythm, not an instant burst), and waving left/right steers the whole
-   phrase down/up; both tilts respond smoothly
+4. When no replay is active, shaking starts one remembered phrase (with its
+   timing bounded to 70–1200 ms between notes, not an instant burst); an empty
+   garden produces one safe note. Waving left/right steers the whole phrase
+   down/up; both tilts respond smoothly
    — if an axis feels swapped, exchange `s_gravX` / `s_gravY` in
    `imuStep()`.
 5. The 3.5 mm jack mutes the speaker (purely hardware — should just work).
    It is also the way to record the box cleanly: the tiny speaker does not
    do it justice.
 6. Play a few even notes: a quiet MUSICBOX heartbeat joins in your tempo
-   and lets go when you stop or drift into rubato.
-7. After playing, leave five quiet seconds (or finish goodnight) so the
-   natural-pause save completes; then power-cycle. A moment after boot it greets you
-   with ONE remembered note — and ghosts never sow before new human play.
-8. The firefly (WS2812) flashes with every note — the same note is always
+   and lets go after you stop.
+7. After playing, leave five quiet seconds so the natural-pause save completes.
+   Alternatively, let goodnight reach silence and leave it there for another
+   three seconds. Then power-cycle: a moment after boot it greets you with ONE
+   remembered note. Apart from that greeting, autonomous phrase ghosts wait
+   for new human play.
+8. The firefly (WS2812) flashes with foreground notes — the same note is always
    the same color — glows softly when a ghost replays a memory, and stays
    completely dark when idle.
-9. Lay it face-down after playing: after 1.2 s the screen and firefly go dark
-   while a gentler lullaby retells the day's phrases; lift it (or press BtnGO /
-   any keyboard key, including in settings) and it wakes instantly.
+9. Lay it face-down after playing: after the 1.2 s dwell the screen and firefly
+   go dark; the first note of a gentler lullaby follows about 1.2 s later and
+   retells recent remembered phrases. Lift it (or press BtnGO / any keyboard
+   key, including in settings) and it wakes instantly.
 
-## Roadmap
+## Next: ENSEMBLE
 
-1. ✅ A playing core on the PC (WAV + live playing) and the ESP32 firmware
-   with INSTRUMENT, gestures and the visualization scenes
-2. ✅ The heart and the soul on the device: tempo entrainment, phrase-aware NVS memory
-   with the waking greeting, the goodnight lullaby (the old "DRONE mode"
-   idea, realized as a behavior instead of a mode — zero settings rows),
-   the firefly, the psychoacoustic bass
-3. LOOP — **deliberately parked**: a record/overdub
-   transport is configuration (against design law 4), and RAM is on the
-   edge. If it ever returns, it returns as a gesture, not a transport.
-4. ~~IR CONDUCTOR~~ — dropped. It needs an IR receiver the ADV does not
-   have, and it strengthens no design law; the IR TX pin stays free for an
-   idea that earns its place.
+The next experiment is a small flock of Grajki that notice one another without
+a phone, router or pairing screen. Each box would broadcast a tiny musical
+presence — enough for nearby instruments to share a pulse, tonal context or an
+occasional answer, never raw audio.
+
+The transport is deliberately undecided until it is prototyped: **BLE
+advertising** and **ESP-NOW** are both plausible. The one that makes discovery
+and low-latency group play feel most automatic wins. It is a little unhinged,
+which is exactly why it belongs here.
