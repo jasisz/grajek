@@ -1,5 +1,6 @@
 .pio/
 .venv/
+__pycache__/
 host/build/
 host/out/
 host/grajek_soul.txt
