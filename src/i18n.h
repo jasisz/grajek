@@ -1,6 +1,7 @@
-// Compile-time-only LCD translations. Polish is the default firmware;
-// define GRAJEK_LANG_EN to build the English variant. Keeping the choice at
-// compile time means there is no language state, NVS key or runtime branch.
+// Compile-time-only LCD translations. The source fallback is Polish, while the
+// public/default PlatformIO environment defines GRAJEK_LANG_EN. Keeping the
+// choice at compile time means there is no language state, NVS key or runtime
+// branch.
 #pragma once
 
 #include <stdint.h>

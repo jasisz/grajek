@@ -11,6 +11,9 @@ intonation in the spirit of Harry Partch, aging tape memory, sympathetic
 string resonators, and a heartbeat that follows *your* tempo instead of
 imposing one.
 
+**Have a Cardputer-ADV? [Install Grajek in your browser](https://jasisz.github.io/grajek/)**
+— English is the default image; Polish is one button beside it.
+
 ## Why
 
 It started as an experimental microtonal instrument and, iteration by
@@ -63,7 +66,7 @@ playing and the remembered garden sings itself to sleep.
   scales.
 - The shared garden, pulse, lullaby and background-preset models, both LCD
   languages, the scale registry and the hardware-independent face-down dwell
-  have host tests. The Polish and English firmware images are also verified
+  have host tests. The English and Polish firmware images are also verified
   with separate end-to-end PlatformIO builds.
 
 ---
@@ -81,6 +84,9 @@ lib/grajek_audio/   synthesis engine — pure C++17, ZERO hardware dependencies
 lib/grajek_core/    pure state models shared by device and host: phrase garden,
                     pulse entrainment, goodnight sequencer, background presets
 host/               PC targets for shaping the sound without flashing
+web/                ESP Web Tools installer published with each tagged release
+tools/              deterministic release/Pages packaging
+.github/workflows/  host + firmware CI; tagged Releases and Pages deployment
 src/                ESP32 firmware (PlatformIO / Arduino core 3.x):
   hal/              I2S speaker output + ES8311, verified board pins
   input/            keyboard (TCA8418 polled over I2C) + BtnGO
@@ -90,7 +96,7 @@ src/                ESP32 firmware (PlatformIO / Arduino core 3.x):
   pulse.cpp         device/audio adapter for the shared pulse tracker
   soul.cpp          what survives the power switch (garden/chord/pulse, NVS)
   firefly.cpp       the WS2812 firefly + battery dusk
-  i18n.cpp          compile-time LCD text (Polish default, English variant)
+  i18n.cpp          compile-time LCD text (English default, Polish variant)
   settings.cpp      scale/timbre/octave/background/scene state, in NVS
   main.cpp          main loop; boots straight into playing
 ```
@@ -153,7 +159,34 @@ The engine applies equal-power polyphony compensation (1/sqrt(voices),
 slowly smoothed), so a held chord sits at roughly the level of a single
 note instead of squashing into the clipper.
 
-## Flashing the Cardputer-ADV
+## Installing on the Cardputer-ADV
+
+The published images are for the **M5Stack Cardputer-ADV only**, not the
+original Cardputer.
+
+### Browser — easiest
+
+Open the **[Grajek web installer](https://jasisz.github.io/grajek/)** in a
+desktop browser with Web Serial support, connect a data-capable USB-C cable and
+choose English or Polish. No local toolchain is needed. Close any serial
+monitor first; when the browser asks for a port, choose the USB JTAG/serial
+device. If no port appears, switch the box off, hold G0 while reconnecting or
+switching it on, release G0 and try again.
+
+The browser writes a complete image from flash offset `0x0`, so it replaces the
+current firmware and clears saved Grajek settings and remembered phrases.
+Tagged versions and SHA-256 checksums are also available under
+**[GitHub Releases](https://github.com/jasisz/grajek/releases)**.
+
+### M5Launcher
+
+M5Launcher 2.8 or newer supports the Cardputer-ADV. Download
+`grajek-cardputer-adv.bin` (English) or `grajek-cardputer-adv-pl.bin` (Polish)
+from the latest release and install the same unzipped file from an OTA Favorite,
+the Launcher WebUI or an SD card. The files are merged images, which Launcher
+recognizes and safely installs into its own app layout.
+
+### Build and flash from source
 
 PlatformIO lives in a project-local uv environment (`.venv`, gitignored).
 You need `uv` and a data-capable USB cable:
@@ -161,17 +194,17 @@ You need `uv` and a data-capable USB cable:
 ```bash
 uv venv .venv
 uv pip install --python .venv/bin/python platformio==6.1.19 pip==26.2 pyyaml==6.0.3  # once
-.venv/bin/pio run -e cardputer-adv               # build Polish (default)
-.venv/bin/pio run -e cardputer-adv-en            # build English
-.venv/bin/pio run -e cardputer-adv -t upload     # upload Polish
-.venv/bin/pio run -e cardputer-adv-en -t upload  # OR upload English
+.venv/bin/pio run -e cardputer-adv               # build English (default)
+.venv/bin/pio run -e cardputer-adv-pl            # build Polish
+.venv/bin/pio run -e cardputer-adv -t upload     # upload English
+.venv/bin/pio run -e cardputer-adv-pl -t upload  # OR upload Polish
 .venv/bin/pio device monitor
 ```
 
 `platformio.ini` pins the pioarduino platform to **55.03.311** so device
 builds use one reproducible Arduino/ESP-IDF toolchain. The display language
-is selected only while compiling: `cardputer-adv` is Polish and
-`cardputer-adv-en` is English. It does not add a language setting or alter the
+is selected only while compiling: `cardputer-adv` is English and
+`cardputer-adv-pl` is Polish. It does not add a language setting or alter the
 saved NVS format.
 
 ### Playing it: straight to the instrument
@@ -331,11 +364,13 @@ source notes are in `src/hal/board_pins.h`.
 ## Next: ENSEMBLE
 
 The next experiment is a small flock of Grajki that notice one another without
-a phone, router or pairing screen. Each box would broadcast a tiny musical
-presence — enough for nearby instruments to share a pulse, tonal context or an
-occasional answer, never raw audio.
+a phone, router or pairing screen. Each box would periodically broadcast a
+tiny musical presence — enough for nearby instruments to discover the flock,
+share a pulse or tonal context, and occasionally answer, never raw audio.
 
 The transport is deliberately undecided until it is prototyped: **BLE
-advertising** and **ESP-NOW** are both plausible. The one that makes discovery
-and low-latency group play feel most automatic wins. It is a little unhinged,
-which is exactly why it belongs here.
+advertisements**, **ESP-NOW connectionless broadcast packets**, or both. No
+session has to be established before a box can announce itself and throw a
+small packet into the room; the prototype will decide which path makes group
+play feel most automatic. It is a little unhinged, which is exactly why it
+belongs here.

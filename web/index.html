@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="Install Grajek on an M5Stack Cardputer-ADV from your browser.">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>Install Grajek</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <script
+      type="module"
+      src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"
+    ></script>
+    <style>
+      :root {
+        --ink: #f6f0df;
+        --muted: #bdb5a2;
+        --night: #141614;
+        --panel: #20231f;
+        --line: #3a3f37;
+        --green: #bbd787;
+        --amber: #efbb69;
+        --esp-tools-button-color: #bbd787;
+        --esp-tools-button-text-color: #17200f;
+        --esp-tools-button-border-radius: 999px;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        background:
+          radial-gradient(circle at 15% 15%, #293225 0, transparent 32rem),
+          radial-gradient(circle at 85% 85%, #33291d 0, transparent 28rem),
+          var(--night);
+        color: var(--ink);
+        font: 17px/1.55 ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+
+      main {
+        width: min(880px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: clamp(48px, 9vw, 96px) 0 64px;
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        color: var(--green);
+        font-size: 0.78rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 720px;
+        margin: 0;
+        font: 700 clamp(3rem, 10vw, 6.8rem)/0.9 Georgia, serif;
+        letter-spacing: -0.055em;
+      }
+
+      .intro {
+        max-width: 650px;
+        margin: 28px 0 36px;
+        color: var(--muted);
+        font-size: 1.05rem;
+      }
+
+      .warning {
+        margin: 0 0 24px;
+        padding: 14px 16px;
+        border: 1px solid #6e5938;
+        border-radius: 14px;
+        background: #292319;
+        color: #f3d6a7;
+      }
+
+      .installers {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .card {
+        min-height: 230px;
+        padding: 26px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: color-mix(in srgb, var(--panel) 94%, transparent);
+        box-shadow: 0 24px 60px rgb(0 0 0 / 22%);
+      }
+
+      .card h2 { margin: 0 0 4px; font: 700 1.55rem/1.2 Georgia, serif; }
+      .card p { min-height: 52px; margin: 0 0 24px; color: var(--muted); }
+      .badge {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: #354127;
+        color: var(--green);
+        font: 700 0.65rem/1 ui-monospace, monospace;
+        vertical-align: middle;
+        text-transform: uppercase;
+      }
+
+      button[slot="activate"] {
+        min-height: 48px;
+        padding: 0 22px;
+        border: 0;
+        border-radius: 999px;
+        background: var(--green);
+        color: #17200f;
+        cursor: pointer;
+        font: 800 0.95rem/1 ui-monospace, monospace;
+      }
+
+      button[slot="activate"]:hover { filter: brightness(1.08); }
+      button[slot="activate"]:focus-visible { outline: 3px solid var(--amber); outline-offset: 4px; }
+
+      .unsupported {
+        display: block;
+        color: var(--amber);
+        font-size: 0.83rem;
+      }
+
+      .instructions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 36px;
+        margin-top: 44px;
+        padding-top: 34px;
+        border-top: 1px solid var(--line);
+      }
+
+      h3 { margin: 0 0 12px; font-size: 1rem; }
+      ol { margin: 0; padding-left: 22px; color: var(--muted); }
+      li + li { margin-top: 8px; }
+      a { color: var(--green); text-underline-offset: 3px; }
+      code { color: var(--amber); }
+
+      footer {
+        display: flex;
+        gap: 18px;
+        justify-content: space-between;
+        margin-top: 48px;
+        color: #888276;
+        font-size: 0.78rem;
+      }
+
+      @media (max-width: 660px) {
+        .installers, .instructions { grid-template-columns: 1fr; }
+        .card { min-height: 0; }
+        footer { display: block; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">M5Stack Cardputer-ADV</p>
+      <h1>Give the box a voice.</h1>
+      <p class="intro">
+        Grajek is a pocket instrument that cannot be played badly. Connect one
+        USB cable and install it directly from this page — no Python, IDE or
+        account required. Release <span id="version">…</span>.
+      </p>
+
+      <p class="warning">
+        <strong>Cardputer-ADV only.</strong> A browser installation replaces the
+        current firmware and clears Grajek's saved settings and phrase garden.
+      </p>
+
+      <section class="installers" aria-label="Choose firmware language">
+        <article class="card">
+          <h2>English <span class="badge">default</span></h2>
+          <p>The public default image. Language is fixed at build time.</p>
+          <esp-web-install-button manifest="manifest.json">
+            <button slot="activate" type="button">Install Grajek</button>
+            <span slot="unsupported" class="unsupported">
+              Use a desktop browser with Web Serial support.
+            </span>
+            <span slot="not-allowed" class="unsupported">
+              Open this page over HTTPS to allow USB access.
+            </span>
+          </esp-web-install-button>
+        </article>
+
+        <article class="card">
+          <h2>Polski</h2>
+          <p>Ten sam instrument, z polskimi napisami na ekranie.</p>
+          <esp-web-install-button manifest="manifest-pl.json">
+            <button slot="activate" type="button">Wgraj Grajka</button>
+            <span slot="unsupported" class="unsupported">
+              Użyj komputerowej przeglądarki obsługującej Web Serial.
+            </span>
+            <span slot="not-allowed" class="unsupported">
+              Otwórz tę stronę przez HTTPS, aby zezwolić na USB.
+            </span>
+          </esp-web-install-button>
+        </article>
+      </section>
+
+      <section class="instructions">
+        <div>
+          <h3>Three steps</h3>
+          <ol>
+            <li>Switch on the Cardputer-ADV and connect a data-capable USB-C cable.</li>
+            <li>Close any serial monitor, click Install and select the USB JTAG/serial device.</li>
+            <li>Wait for verification and let the box restart.</li>
+          </ol>
+          <p class="intro" style="margin: 16px 0 0; font-size: 0.82rem">
+            No port? Switch it off, hold G0 while reconnecting or switching it
+            on, release G0, then retry.
+          </p>
+        </div>
+        <div>
+          <h3>Already using M5Launcher?</h3>
+          <p class="intro" style="margin: 0; font-size: 0.9rem">
+            Download the image for your language from the
+            <a href="https://github.com/jasisz/grajek/releases/latest">latest release</a>.
+            The same merged <code>.bin</code> works from OTA Favorites, the
+            WebUI or an SD card.
+          </p>
+        </div>
+      </section>
+
+      <footer>
+        <span>Desktop Chrome or Edge · not iOS</span>
+        <a href="https://github.com/jasisz/grajek">source code · MIT</a>
+      </footer>
+    </main>
+
+    <script>
+      fetch("manifest.json")
+        .then((response) => response.json())
+        .then((manifest) => { document.querySelector("#version").textContent = manifest.version; })
+        .catch(() => { document.querySelector("#version").textContent = "unknown"; });
+    </script>
+  </body>
+</html>
