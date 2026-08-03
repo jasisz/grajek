@@ -59,6 +59,8 @@
 #include "ga_reverb.h"
 #include "ga_scales.h"
 #include "ga_strings.h"
+#include "gk_garden.h"
+#include "gk_pulse.h"
 #include "wav_writer.h"
 
 using namespace ga;
@@ -133,16 +135,7 @@ Weather g_weather;
 // After ~7 s of silence the box quietly re-sows one whole recent phrase. The
 // player's first real key silences the ghosts immediately — it never fights
 // the human.
-struct GardenPhraseNote {
-  float cents = 0.0f;
-  uint16_t gapMs = 0;
-};
-
-constexpr int kGardenPhraseMax = 6;
-struct GardenPhrase {
-  GardenPhraseNote note[kGardenPhraseMax];
-  int count = 0;
-};
+using GardenPhrase = gk::GardenPhrase;
 
 struct GardenReplay {
   GardenPhrase phrase;
@@ -158,25 +151,14 @@ struct GardenNoteOff {
   int32_t id = -1;
 };
 
-struct GhostGarden {
-  struct Mem {
-    float cents;
-    uint16_t gapMs;
-    bool phraseStart;
-  };
-  static constexpr int kCap = 32;
-  Mem ring[kCap];
-  int head = 0, count = 0;
+struct GhostPlayback {
   double lastInput = 0.0;
-  double lastOnset = 0.0;
-  double captureStarted = 0.0;
-  int captureNotes = 0;
-  bool haveLiveOnset = false;
   double nextAt = 0.0;
   uint32_t activeMask = 0;  // which of the 4 ghost ids are sounding
   int nextSlot = 0;
 };
-GhostGarden g_garden;
+gk::Garden g_garden;
+GhostPlayback g_ghost;
 GardenReplay g_ghostPhrase;
 GardenReplay g_shakePhrase;
 GardenNoteOff g_ghostOffs[6];
@@ -188,8 +170,6 @@ int g_shakeSlot = 0;
 int g_shakeStep = 1;
 constexpr int32_t kGhostIdBase = 1100;
 constexpr int32_t kShakeIdBase = 1120;
-constexpr double kPhraseBreakSec = 1.5;
-constexpr double kPhraseMaxDurationSec = 5.0;
 // 7 s, synced with the device: 12 s made the box's memory practically
 // inaudible in normal play (a child does not pause that long)
 constexpr double kGhostIdleSec = 7.0;
@@ -202,19 +182,7 @@ bool g_playedThisSession = false;
 // Regular playing (a few even intervals) summons a quiet MUSICBOX heartbeat
 // on the root, phase-anchored to YOUR presses; stop, or drift into rubato,
 // and it lets go within a few beats. The ghosts remember the last pulse.
-struct Pulse {
-  double onsets[8];
-  int count = 0;
-  double period = 0.0;
-  double nextBeatAt = 0.0;
-  double lastOnset = 0.0;
-  int beatsAlone = 0;
-  int beatsPlayed = 0;  // warm-up: the heart fades in over its first beats
-  int step = 0;         // position in the background-chord arpeggio
-  bool ticking = false;
-  double memory = 0.0;  // last stable period — the ghosts sow on this grid
-};
-Pulse g_pulse;
+gk::PulseTracker g_pulse;
 
 // Session recorder: the final mix (post-everything), armed with SHIFT+W.
 std::atomic<bool> g_recOn{false};
@@ -375,6 +343,16 @@ double nowSec() {
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
+uint32_t nowMs32() {
+  using namespace std::chrono;
+  // Integer-to-unsigned conversion is defined modulo 2^32. Going through the
+  // old double-seconds adapter became undefined once host uptime exceeded the
+  // 49.7-day uint32 millisecond range.
+  return static_cast<uint32_t>(
+      duration_cast<milliseconds>(steady_clock::now().time_since_epoch())
+          .count());
+}
+
 const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED",
                                                "CHIME", "MUSICBOX"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
@@ -484,198 +462,36 @@ void weatherTick(const Ui& ui) {
 
 float rnd01f() { return (float)(rand() % 10000) * 0.0001f; }
 
-const GhostGarden::Mem& gardenMemoryAt(int idxOldest) {
-  const int idx = (g_garden.head - g_garden.count + idxOldest +
-                   2 * GhostGarden::kCap) % GhostGarden::kCap;
-  return g_garden.ring[idx];
-}
+float hostGardenRandom(void*) { return rnd01f(); }
 
 uint16_t replayGapMs(uint16_t recordedMs) {
-  // Keep the human rhythm, but make chords legible to a slow envelope and
-  // cap long hesitations that belong between phrases, not inside one.
-  if (recordedMs < 70) return 70;
-  if (recordedMs > 1200) return 1200;
-  return recordedMs;
-}
-
-bool phraseAtAnchor(GardenPhrase* out, int anchor) {
-  if (!out || anchor < 0 || anchor >= g_garden.count) return false;
-  int first = anchor;
-  while (first > 0 && !gardenMemoryAt(first).phraseStart) --first;
-  int last = anchor;
-  while (last + 1 < g_garden.count &&
-         !gardenMemoryAt(last + 1).phraseStart)
-    ++last;
-
-  int window = first;
-  const int available = last - first + 1;
-  if (available > kGardenPhraseMax) {
-    window = anchor - kGardenPhraseMax / 2;
-    if (window < first) window = first;
-    const int latest = last - kGardenPhraseMax + 1;
-    if (window > latest) window = latest;
-  }
-  out->count = std::min(available, kGardenPhraseMax);
-  for (int i = 0; i < out->count; ++i) {
-    const GhostGarden::Mem& m = gardenMemoryAt(window + i);
-    out->note[i] = {m.cents, i == 0 ? (uint16_t)0 : m.gapMs};
-  }
-  return out->count > 0;
+  return gk::Garden::replayGapMs(recordedMs);
 }
 
 bool selectGardenPhrase(GardenPhrase* out) {
-  if (!out || g_garden.count == 0) return false;
-  GardenPhrase fallback;
-  for (int attempt = 0; attempt < 5; ++attempt) {
-    const float u = rnd01f();
-    int back = (int)(u * u * (float)g_garden.count);
-    if (back >= g_garden.count) back = g_garden.count - 1;
-    const int anchor = g_garden.count - 1 - back;
-    GardenPhrase candidate;
-    if (!phraseAtAnchor(&candidate, anchor)) continue;
-    if (fallback.count == 0) fallback = candidate;
-    if (candidate.count >= 2) {
-      *out = candidate;
-      return true;
-    }
-  }
-  *out = fallback;
-  return out->count > 0;
+  return g_garden.selectPhrase(out, hostGardenRandom, nullptr);
 }
 
 void gardenPush(float cents) {
   const double now = nowSec();
-  const double gap = g_garden.haveLiveOnset
-                         ? now - g_garden.lastOnset
-                         : 0.0;
-  const bool startsPhrase =
-      !g_garden.haveLiveOnset || gap >= kPhraseBreakSec ||
-      g_garden.captureNotes >= kGardenPhraseMax ||
-      now - g_garden.captureStarted >= kPhraseMaxDurationSec;
-  const uint16_t storedGap =
-      startsPhrase ? 0 : (uint16_t)std::min(1499.0, gap * 1000.0 + 0.5);
   g_playedThisSession = true;
-  g_garden.ring[g_garden.head] = {cents, storedGap, startsPhrase};
-  g_garden.head = (g_garden.head + 1) % GhostGarden::kCap;
-  if (g_garden.count < GhostGarden::kCap) {
-    ++g_garden.count;
-  } else {
-    // The new logical oldest may be the middle of an overwritten phrase.
-    g_garden.ring[g_garden.head].phraseStart = true;
-    g_garden.ring[g_garden.head].gapMs = 0;
-  }
-  if (startsPhrase) {
-    g_garden.captureStarted = now;
-    g_garden.captureNotes = 1;
-  } else {
-    ++g_garden.captureNotes;
-  }
-  g_garden.lastOnset = now;
-  g_garden.lastInput = now;
-  g_garden.haveLiveOnset = true;
+  g_garden.push(cents, nowMs32());
+  g_ghost.lastInput = now;
 }
 
 void pulseOnOnset() {
-  const double t = nowSec();
-  Pulse& p = g_pulse;
-  const double d = p.lastOnset > 0.0 ? t - p.lastOnset : 0.0;
-  if (p.count < 8) {
-    p.onsets[p.count++] = t;
-  } else {
-    memmove(p.onsets, p.onsets + 1, 7 * sizeof(double));
-    p.onsets[7] = t;
-  }
-  p.lastOnset = t;
-
-  if (p.ticking) {
-    // ENTRAINED: a phase-locked loop, not a pass/fail test — the heart
-    // bends toward the player instead of giving up.
-    p.beatsAlone = 0;
-    const double r = p.period > 0.0 ? d / p.period : 0.0;
-    if (r > 0.7 && r < 1.4) {
-      p.period += 0.25 * (d - p.period);          // tempo follows you
-    } else if (r > 1.6 && r < 2.4) {
-      p.period += 0.12 * (d * 0.5 - p.period);    // you moved to half notes
-    } else if (r > 0.35 && r < 0.65) {
-      p.period += 0.12 * (d * 2.0 - p.period);    // you moved to eighths
-    }
-    p.memory = p.period;
-    // phase: nudge the beat grid halfway toward this onset
-    double e = t - p.nextBeatAt;
-    e -= p.period * round(e / p.period);  // wrapped to [-T/2, T/2]
-    p.nextBeatAt += 0.5 * e;
-    while (p.nextBeatAt <= t) p.nextBeatAt += p.period;
-    return;
-  }
-
-  // bootstrap: a few even intervals summon the heart
-  double ioi[7];
-  int n = 0;
-  for (int i = 1; i < p.count; ++i) {
-    const double dd = p.onsets[i] - p.onsets[i - 1];
-    if (dd > 0.18 && dd < 2.0) ioi[n++] = dd;
-  }
-  if (n < 3) return;
-  const int m = n < 5 ? n : 5;  // judge the last few intervals
-  double w[5];
-  for (int i = 0; i < m; ++i) w[i] = ioi[n - m + i];
-  for (int i = 1; i < m; ++i) {  // insertion sort
-    const double v = w[i];
-    int j = i;
-    while (j > 0 && w[j - 1] > v) { w[j] = w[j - 1]; --j; }
-    w[j] = v;
-  }
-  const double med = w[m / 2];
-  int good = 0;
-  for (int i = 0; i < m; ++i)
-    if (fabs(w[i] - med) < 0.15 * med) ++good;
-  if (good >= m - 1) {
-    p.period = med;
-    p.memory = med;
-    p.nextBeatAt = t + p.period;  // the beat anchors to YOUR press
-    p.beatsAlone = 0;
-    p.beatsPlayed = 0;
-    p.step = 0;
-    p.ticking = true;
-  }
+  g_pulse.onOnset(nowSec());
 }
 
 void pulseTick() {
-  Pulse& p = g_pulse;
-  if (!p.ticking) return;
-  const double now = nowSec();
-  if (now < p.nextBeatAt) return;
-  if (now - p.lastOnset > p.period * 1.5) ++p.beatsAlone;
-  const float fade = 1.0f - (float)p.beatsAlone / 6.0f;
-  if (fade <= 0.0f) {
-    p.ticking = false;
-    p.count = 0;
-    p.step = 0;
-    p.beatsPlayed = 0;
-    return;
-  }
-  if (p.beatsPlayed < 12) ++p.beatsPlayed;
-  const float warm =  // the heart fades IN too — no sudden metronome
-      p.beatsPlayed < 3 ? 0.3f + (float)p.beatsPlayed * 0.23f : 1.0f;
-
-  // What the heart plays: an arpeggio of YOUR background chord, one note
-  // per beat, accent on the start of each cycle. Default 1/1+3/2 gives a
-  // root-fifth heartbeat; a hand-picked 4-note chord becomes a 4-note riff.
-  float cents = 0.0f, accent = 1.0f;
-  if (g_tampura && g_bgCount > 0) {
-    const int i = p.step % g_bgCount;
-    cents = g_bg[i].cents;
-    accent = i == 0 ? 1.2f : 0.8f;
-    ++p.step;
-  }
-  float vel = 0.17f * fade * warm * accent;
-  if (vel > 0.24f) vel = 0.24f;
+  const int chordCount = g_tampura ? g_bgCount : 0;
+  const gk::PulseBeat beat = g_pulse.tick(nowSec(), chordCount);
+  if (!beat.play) return;
+  const float cents = beat.chordIndex >= 0 ? g_bg[beat.chordIndex].cents : 0.0f;
   // MUSICBOX ends by itself — no note-off bookkeeping
   g_engine.setParam(Param::TimbrePreset, 4.0f);
-  g_engine.noteOn(1300, cents, vel);
+  g_engine.noteOn(1300, cents, beat.velocity);
   g_engine.setParam(Param::TimbrePreset, (float)g_uiPreset);
-  p.nextBeatAt += p.period;
-  while (p.nextBeatAt < now) p.nextBeatAt += p.period;  // never spiral
 }
 
 double expDelay(double meanSec) {
@@ -699,20 +515,20 @@ void drainGardenOffs(GardenNoteOff* offs, int& count, int32_t idBase,
 void drainGardenOffs() {
   const double now = nowSec();
   drainGardenOffs(g_ghostOffs, g_ghostOffCount, kGhostIdBase, 4,
-                  g_garden.activeMask, now);
+                  g_ghost.activeMask, now);
   drainGardenOffs(g_shakeOffs, g_shakeOffCount, kShakeIdBase, 8,
                   g_shakeMask, now);
 }
 
 void gardenSilenceGhosts() {
   g_ghostPhrase.active = false;
-  g_garden.nextAt = 0.0;
+  g_ghost.nextAt = 0.0;
   for (int i = 0; i < g_ghostOffCount; ++i)
     g_engine.noteOff(g_ghostOffs[i].id);
   g_ghostOffCount = 0;
   for (int i = 0; i < 4; ++i)
-    if (g_garden.activeMask & (1u << i)) g_engine.noteOff(kGhostIdBase + i);
-  g_garden.activeMask = 0;
+    if (g_ghost.activeMask & (1u << i)) g_engine.noteOff(kGhostIdBase + i);
+  g_ghost.activeMask = 0;
 }
 
 void gardenSilenceShake() {
@@ -731,12 +547,14 @@ void scheduleNextGhost(double now, bool firstAfterSilence) {
   double target = now + delay;
   // Only the phrase start snaps to the remembered pulse. The internal
   // timing remains the player's own instead of quantizing every note.
-  if (g_pulse.memory > 0.15) {
-    const double k = round((target - g_pulse.lastOnset) / g_pulse.memory);
-    target = g_pulse.lastOnset + k * g_pulse.memory;
-    while (target < now + 0.2) target += g_pulse.memory;
+  const double period = g_pulse.memoryPeriodSec();
+  if (period > 0.15) {
+    const double anchor = g_pulse.lastOnsetSec();
+    const double k = round((target - anchor) / period);
+    target = anchor + k * period;
+    while (target < now + 0.2) target += period;
   }
-  g_garden.nextAt = target;
+  g_ghost.nextAt = target;
 }
 
 void ghostPhraseStart(double now) {
@@ -764,9 +582,9 @@ void ghostPhraseTick(const Ui& ui, double now) {
   const uint16_t nextGap =
       more ? replayGapMs(g_ghostPhrase.phrase.note[i + 1].gapMs) : 0;
   const double hold = more ? std::min(1.0, (nextGap + 180) * 0.001) : 1.4;
-  const int slot = g_garden.nextSlot++ & 3;
+  const int slot = g_ghost.nextSlot++ & 3;
   const int32_t id = kGhostIdBase + slot;
-  g_garden.activeMask |= (1u << slot);
+  g_ghost.activeMask |= (1u << slot);
   g_engine.setParam(Param::EnvAttack, 0.22f);
   g_engine.noteOn(id,
                   g_ghostPhrase.phrase.note[i].cents +
@@ -788,22 +606,22 @@ void ghostPhraseTick(const Ui& ui, double now) {
 void gardenTick(const Ui& ui) {
   if (!g_playedThisSession) return;  // ghosts continue sessions, never start them
   const double now = nowSec();
-  if (now - g_garden.lastInput < kGhostIdleSec || g_garden.count == 0) {
-    if (g_ghostPhrase.active || g_garden.activeMask || g_ghostOffCount)
+  if (now - g_ghost.lastInput < kGhostIdleSec || g_garden.count() == 0) {
+    if (g_ghostPhrase.active || g_ghost.activeMask || g_ghostOffCount)
       gardenSilenceGhosts();
     else
-      g_garden.nextAt = 0.0;
+      g_ghost.nextAt = 0.0;
     return;
   }
   if (g_ghostPhrase.active) {
     ghostPhraseTick(ui, now);
     return;
   }
-  if (g_garden.nextAt == 0.0) {
+  if (g_ghost.nextAt == 0.0) {
     scheduleNextGhost(now, true);
     return;
   }
-  if (now < g_garden.nextAt) return;
+  if (now < g_ghost.nextAt) return;
   ghostPhraseStart(now);
   ghostPhraseTick(ui, now);
 }
@@ -836,19 +654,13 @@ void shakePhraseTick(const Ui& ui, double now) {
 void gardenShake(const Ui& ui, float dir) {
   const double now = nowSec();
   g_playedThisSession = true;
-  g_garden.lastInput = now;
+  g_ghost.lastInput = now;
   gardenSilenceGhosts();
   if (g_shakePhrase.active) return;  // let the remembered sentence finish
   gardenSilenceShake();              // release the previous sentence's tail
 
   GardenPhrase phrase;
-  float transpose = 0.0f;
-  if (selectGardenPhrase(&phrase)) {
-    const float r = rnd01f();
-    if (r >= 0.78f)
-      transpose = dir >= 0.0f ? (r < 0.92f ? 1200.0f : 702.0f)
-                              : (r < 0.92f ? -498.0f : -1200.0f);
-  } else {
+  if (!g_garden.pluck(&phrase, dir, hostGardenRandom, nullptr)) {
     const int hi = 2 * scaleStepsPerOctave((ScaleId)ui.scale);
     g_shakeStep += dir >= 0.0f ? 1 : -1;
     g_shakeStep = std::max(1, std::min(g_shakeStep, hi - 1));
@@ -859,7 +671,7 @@ void gardenShake(const Ui& ui, float dir) {
   g_shakePhrase.phrase = phrase;
   g_shakePhrase.pos = 0;
   g_shakePhrase.nextAt = now;
-  g_shakePhrase.transpose = transpose;
+  g_shakePhrase.transpose = 0.0f;  // gk::Garden::pluck already seasoned it
   g_shakePhrase.velocity = 0.70f;
   g_shakePhrase.active = true;
   printf("\n  >> wiatr wspomnien: %d nut, kierunek %s\n", phrase.count,
@@ -895,8 +707,8 @@ void printStatus(const Ui& ui) {
            (float)g_looper.lengthFrames() / kSr,
            g_looper.playbackLevel() * 100.0f);
   }
-  if (g_pulse.ticking)
-    printf(" puls:%d", (int)(60.0 / g_pulse.period + 0.5));
+  if (g_pulse.ticking())
+    printf(" puls:%d", (int)(60.0 / g_pulse.periodSec() + 0.5));
   if (g_harmony) printf(" harm:ON");
   if (!g_echo.enabled()) printf(" echo:OFF");
   if (!g_tampura) printf(" tamb:OFF");
@@ -945,11 +757,11 @@ void soulSave(const Ui& ui) {
   ok = fprintf(f, "bg %d %d", g_bgCustom ? 1 : 0, g_bgCount) >= 0 && ok;
   for (int i = 0; i < g_bgCount; ++i)
     ok = fprintf(f, " %.2f", (double)g_bg[i].cents) >= 0 && ok;
-  ok = fprintf(f, "\ngarden %d", g_garden.count) >= 0 && ok;
-  for (int i = 0; i < g_garden.count; ++i) {
-    const GhostGarden::Mem& m = gardenMemoryAt(i);
-    ok = fprintf(f, " %.2f %u %d", (double)m.cents, (unsigned)m.gapMs,
-                 m.phraseStart ? 1 : 0) >= 0 && ok;
+  ok = fprintf(f, "\ngarden %d", g_garden.count()) >= 0 && ok;
+  for (int i = 0; i < g_garden.count(); ++i) {
+    ok = fprintf(f, " %.2f %u %d", (double)g_garden.cents(i),
+                 (unsigned)g_garden.delayMs(i),
+                 g_garden.startsPhrase(i) ? 1 : 0) >= 0 && ok;
   }
   ok = fprintf(f, "\n") >= 0 && ok;
   ok = fflush(f) == 0 && ok;
@@ -969,7 +781,9 @@ bool soulLoad(Ui& ui) {
   float wet = 0.35f;
   Ui loadedUi = ui;
   BgNote loadedBg[4] = {};
-  GhostGarden::Mem loadedGarden[GhostGarden::kCap] = {};
+  float loadedGardenCents[gk::kGardenCapacity] = {};
+  uint16_t loadedGardenDelay[gk::kGardenCapacity] = {};
+  uint32_t loadedPhraseStartMask = 0;
   int loadedGardenCount = 0;
   if (fscanf(f, "%31s %d", tag, &ver) == 2 &&
       strcmp(tag, "grajek-soul") == 0 && ver == 2 &&
@@ -988,7 +802,7 @@ bool soulLoad(Ui& ui) {
     }
     int gc = -1;
     bool gardenOk = bgOk && fscanf(f, " garden %d", &gc) == 1 && gc >= 0 &&
-                    gc <= GhostGarden::kCap;
+                    gc <= gk::kGardenCapacity;
     for (int i = 0; gardenOk && i < gc; ++i) {
       float cents = 0.0f;
       unsigned gap = 0;
@@ -998,9 +812,9 @@ bool soulLoad(Ui& ui) {
                  (starts == 0 || starts == 1) && (i != 0 || starts == 1);
       if (gardenOk) {
         const bool phraseStart = starts != 0;
-        loadedGarden[i] = {cents,
-                           phraseStart ? (uint16_t)0 : (uint16_t)gap,
-                           phraseStart};
+        loadedGardenCents[i] = cents;
+        loadedGardenDelay[i] = phraseStart ? (uint16_t)0 : (uint16_t)gap;
+        if (phraseStart) loadedPhraseStartMask |= 1u << i;
       }
     }
     if (gardenOk) {
@@ -1020,12 +834,8 @@ bool soulLoad(Ui& ui) {
     g_bgCount = bgCount;
     g_bgNextId = bgCount;
     g_bgCustom = bgCustom != 0;
-    for (int i = 0; i < loadedGardenCount; ++i)
-      g_garden.ring[i] = loadedGarden[i];
-    g_garden.count = loadedGardenCount;
-    g_garden.head = loadedGardenCount % GhostGarden::kCap;
-    g_garden.haveLiveOnset = false;
-    g_garden.captureNotes = 0;
+    g_garden.restore(loadedGardenCents, loadedGardenDelay,
+                     loadedPhraseStartMask, loadedGardenCount);
   }
   return ok;
 }
@@ -1131,63 +941,9 @@ int selftest() {
   return 0;
 }
 
-int gardenSelftest() {
-  int failed = 0;
-  auto expect = [&](bool condition, const char* what) {
-    if (!condition) {
-      fprintf(stderr, "garden-test: FAIL: %s\n", what);
-      ++failed;
-    }
-  };
-
-  g_garden = GhostGarden{};
-  g_garden.ring[0] = {0.0f, 0, true};
-  g_garden.ring[1] = {200.0f, 120, false};
-  g_garden.ring[2] = {400.0f, 0, false};  // a chord stays in one phrase
-  g_garden.ring[3] = {700.0f, 0, true};
-  g_garden.ring[4] = {900.0f, 330, false};
-  g_garden.head = 5;
-  g_garden.count = 5;
-  GardenPhrase phrase;
-  expect(phraseAtAnchor(&phrase, 1), "select phrase at middle note");
-  expect(phrase.count == 3, "phrase boundaries include exactly 3 notes");
-  expect(phrase.note[1].gapMs == 120 && phrase.note[2].gapMs == 0,
-         "phrase preserves timing and chord gap");
-  expect(phraseAtAnchor(&phrase, 4) && phrase.count == 2,
-         "second phrase remains separate");
-  expect(replayGapMs(0) == 70 && replayGapMs(240) == 240 &&
-             replayGapMs(1499) == 1200,
-         "replay timing clamps only inaudible/long extremes");
-
-  g_garden = GhostGarden{};
-  gardenPush(0.0f);
-  expect(gardenMemoryAt(0).phraseStart, "first onset starts a phrase");
-  g_garden.lastOnset = nowSec() - 2.0;
-  gardenPush(200.0f);
-  expect(gardenMemoryAt(1).phraseStart,
-         "a 1.5 s pause starts a fresh phrase");
-  g_garden.captureNotes = kGardenPhraseMax;
-  g_garden.lastOnset = nowSec();
-  gardenPush(400.0f);
-  expect(gardenMemoryAt(2).phraseStart,
-         "the seventh onset starts a bounded phrase");
-
-  g_garden = GhostGarden{};
-  for (int i = 0; i <= GhostGarden::kCap; ++i) gardenPush((float)i);
-  expect(g_garden.count == GhostGarden::kCap,
-         "garden remains at fixed ring capacity");
-  expect(gardenMemoryAt(0).phraseStart && gardenMemoryAt(0).gapMs == 0,
-         "ring overwrite repairs the new oldest phrase boundary");
-
-  if (failed == 0) printf("garden-test ok — boundaries, timing, ring wrap\n");
-  return failed == 0 ? 0 : 1;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc > 1 && strcmp(argv[1], "--garden-test") == 0)
-    return gardenSelftest();
   srand((unsigned)time(nullptr));
   g_engine.init(kSr);
   g_engine.setParam(Param::TimbrePreset, 3);  // CHIME
@@ -1287,15 +1043,13 @@ int main(int argc, char** argv) {
   double lastStatusAt = nowSec();
   if (soulLoaded) {
     printf("\n  (pamietam cie: tlo %d nut, %d wspomnien z poprzedniej"
-           " sesji)\n", g_bgCount, g_garden.count);
-    if (g_garden.count > 0) {
+           " sesji)\n", g_bgCount, g_garden.count());
+    if (g_garden.count() > 0) {
       // it greets you with one of your own notes from last time
       schedule(2.5, [&ui] {
-        if (g_playedThisSession || g_garden.count == 0) return;
-        const int last =
-            (g_garden.head - 1 + GhostGarden::kCap) % GhostGarden::kCap;
+        if (g_playedThisSession || g_garden.count() == 0) return;
         g_engine.setParam(Param::EnvAttack, 1.0f);
-        g_engine.noteOn(1198, g_garden.ring[last].cents, 0.3f);
+        g_engine.noteOn(1198, g_garden.freshestCents(), 0.3f);
         g_engine.setParam(Param::EnvAttack, timbrePreset(ui.preset).attack);
         schedule(2.2, [] { g_engine.noteOff(1198); });
       });
@@ -1467,7 +1221,7 @@ int main(int argc, char** argv) {
         // presence = real musical keys only: arrows, ESC sequences and
         // control chords must not count as playing (every raw byte used to
         // silence the ghosts, so waving the filter shooed them away)
-        g_garden.lastInput = nowSec();
+        g_ghost.lastInput = nowSec();
         gardenSilenceGhosts();
         gardenSilenceShake();
         const int id = kp.row * 14 + kp.col;
@@ -1547,12 +1301,10 @@ int main(int argc, char** argv) {
   gardenSilenceGhosts();
   gardenSilenceShake();
   soulSave(ui);
-  if (g_garden.count > 0) {
+  if (g_garden.count() > 0) {
     // goodnight: it hums your last remembered note as it falls asleep
-    const int last =
-        (g_garden.head - 1 + GhostGarden::kCap) % GhostGarden::kCap;
     g_engine.setParam(Param::EnvAttack, 0.12f);
-    g_engine.noteOn(1199, g_garden.ring[last].cents, 0.25f);
+    g_engine.noteOn(1199, g_garden.freshestCents(), 0.25f);
     sleepMs(500);
     g_engine.noteOff(1199);
     sleepMs(300);

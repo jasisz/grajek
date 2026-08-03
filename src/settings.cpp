@@ -4,27 +4,17 @@
 
 #include "ambient.h"
 #include "hal/audio_out.h"
+#include "i18n.h"
 #include "viz.h"
 
 namespace {
 
-const char* kPresetNames[ga::kNumTimbrePresets] = {"PURE", "DRONE", "REED",
-                                                   "CHIME", "MUSICBOX"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 
-// kolejność odkrywania: od skal, w których nic nie zabrzmi źle, do coraz
-// dziwniejszych — maluch zatrzyma się na początku, starszak dojdzie do
-// końca, a na samym końcu czeka WILK, w którym nic nie brzmi czysto
-const ga::ScaleId kScaleOrder[(int)ga::ScaleId::Count] = {
-    ga::ScaleId::PENTA, ga::ScaleId::MAJOR, ga::ScaleId::EDO12,
-    ga::ScaleId::EDO19, ga::ScaleId::EDO31, ga::ScaleId::JI11,
-    ga::ScaleId::WOLF,
-};
-
-int s_scaleIdx = 0;  // indeks w kScaleOrder (PENTA)
+int s_scaleIdx = 0;  // indeks w statycznym rejestrze (PENTA)
 int s_preset = 3;    // CHIME — ładne samo z siebie
 int s_octave = 2;    // 220 Hz
-bool s_bgOn = true;
+gk::BackgroundId s_bgPreset = gk::BackgroundId::Drone;
 int s_vizScene = 0;  // nocna łąka
 
 constexpr uint8_t kDirtyScale = 1u << 0;
@@ -41,13 +31,26 @@ namespace settings {
 void load() {
   Preferences p;
   if (!p.begin("grajek", true)) return;  // normal on a fresh device
-  s_scaleIdx = p.getUChar("skala", 0) % (int)ga::ScaleId::Count;
+  s_scaleIdx = p.getUChar("skala", 0) % (int)ga::scalePluginCount();
   s_preset = p.getUChar("barwa", 3) % ga::kNumTimbrePresets;
   s_octave = p.getUChar("okt", 2) % 4;
-  s_bgOn = p.getBool("tlo", true);
+  const bool hasBackgroundPreset = p.isKey("bgmode");
+  const uint8_t backgroundRaw =
+      hasBackgroundPreset
+          ? p.getUChar("bgmode",
+                       static_cast<uint8_t>(gk::BackgroundId::Drone))
+          : static_cast<uint8_t>(gk::BackgroundId::Drone);
+  const bool hasLegacyBackground =
+      !hasBackgroundPreset && p.isKey("tlo");
+  const bool legacyBackgroundOn =
+      hasLegacyBackground ? p.getBool("tlo", true) : true;
+  const gk::BackgroundSetting background = gk::decodeBackgroundSetting(
+      hasBackgroundPreset, backgroundRaw, hasLegacyBackground,
+      legacyBackgroundOn);
+  s_bgPreset = background.id;
   s_vizScene = p.getUChar("scena", 0) % viz::kSceneCount;
   p.end();
-  s_dirty = 0;
+  s_dirty = background.needsWrite ? kDirtyBackground : 0;
 }
 
 bool save() {
@@ -72,7 +75,8 @@ bool save() {
       p.putUChar("okt", (uint8_t)s_octave) == sizeof(uint8_t))
     saved |= kDirtyOctave;
   if ((s_dirty & kDirtyBackground) &&
-      p.putBool("tlo", s_bgOn) == sizeof(bool))
+      p.putUChar("bgmode", static_cast<uint8_t>(s_bgPreset)) ==
+          sizeof(uint8_t))
     saved |= kDirtyBackground;
   if ((s_dirty & kDirtyScene) &&
       p.putUChar("scena", (uint8_t)s_vizScene) == sizeof(uint8_t))
@@ -85,19 +89,19 @@ bool save() {
   return s_dirty == 0;
 }
 
-ga::ScaleId scale() { return kScaleOrder[s_scaleIdx]; }
+ga::ScaleId scale() { return ga::scalePluginAt(s_scaleIdx).id; }
 int preset() { return s_preset; }
 int octave() { return s_octave; }
 float baseHz() { return kBaseOctaves[s_octave]; }
-bool backgroundOn() { return s_bgOn; }
+gk::BackgroundId backgroundPreset() { return s_bgPreset; }
 
 const char* presetName(int idx) {
   if (idx < 0 || idx >= ga::kNumTimbrePresets) idx = 0;
-  return kPresetNames[idx];
+  return i18n::presetName(idx);
 }
 
 void cycleScale() {
-  s_scaleIdx = (s_scaleIdx + 1) % (int)ga::ScaleId::Count;
+  s_scaleIdx = (s_scaleIdx + 1) % (int)ga::scalePluginCount();
   s_dirty |= kDirtyScale;
 }
 
@@ -111,9 +115,11 @@ void cycleOctave() {
   s_dirty |= kDirtyOctave;
 }
 
-void toggleBackground() {
-  s_bgOn = !s_bgOn;
-  ambient::backgroundSetEnabled(s_bgOn);
+void cycleBackground() {
+  const int next =
+      (static_cast<int>(s_bgPreset) + 1) % gk::backgroundPresetCount();
+  s_bgPreset = static_cast<gk::BackgroundId>(next);
+  ambient::backgroundSetPreset(s_bgPreset);
   s_dirty |= kDirtyBackground;
 }
 
@@ -131,6 +137,9 @@ void applyToEngine(ga::Engine& e) {
   hal::strings().setRootHz(root);  // halo strun dostraja się do centrum
   e.setParam(ga::Param::TimbrePreset, (float)s_preset);
   ambient::setPreset(s_preset);
+  // Preserve a soul-restored custom chord on later timbre/octave changes.
+  if (ambient::backgroundSelectedPreset() != s_bgPreset)
+    ambient::backgroundSetPreset(s_bgPreset);
 }
 
 }  // namespace settings

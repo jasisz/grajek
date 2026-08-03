@@ -4,10 +4,8 @@
 #include <math.h>
 
 #include "ga_dsp.h"
+#include "gk_lullaby.h"
 #include "hal/audio_out.h"
-#include "pulse.h"
-#include "settings.h"
-#include "soul.h"
 
 namespace {
 
@@ -19,6 +17,7 @@ BgNote s_bg[4] = {{0.0f, 1000}, {702.0f, 1001}, {0.0f, -1}, {0.0f, -1}};
 int s_bgCount = 2;
 bool s_bgOn = true;
 bool s_bgCustom = false;  // a hand-picked background silences the weather vote
+gk::BackgroundId s_bgPreset = gk::BackgroundId::Drone;
 uint32_t s_bgNextId = 2;  // rotates through ids 1000..1015
 
 // --- weather ---
@@ -27,25 +26,10 @@ int s_fifthVariant = 0;  // 0 = 3/2, 1 = 7/4 (default background only)
 float s_cutoffBase = 7500.0f;
 float s_spaceBase = 0.5f;  // przechył do/od siebie: głębia przestrzeni
 
-// --- phrase garden ---
-// gapMs is the recorded inter-onset distance. phraseStart is separate so a
-// real chord may keep gapMs=0 without being mistaken for several phrases.
-struct Mem {
-  float cents;
-  uint16_t gapMs;
-  bool phraseStart;
-};
-constexpr int kGardenCap = ambient::kGardenCapacity;
-constexpr uint32_t kPhraseBreakMs = 1500;
-constexpr uint32_t kPhraseMaxDurationMs = 5000;
-Mem s_ring[kGardenCap];
-int s_head = 0, s_count = 0;
+gk::Garden s_garden;
 uint32_t s_lastInputMs = 0;
-uint32_t s_lastGardenMs = 0;
-uint32_t s_captureStartedMs = 0;
-int s_captureNotes = 0;
-bool s_haveLiveOnset = false;
 uint32_t s_nextGhostMs = 0;
+bool s_nextGhostPending = false;
 uint32_t s_ghostMask = 0;
 int s_ghostSlot = 0;
 ambient::GardenPhrase s_ghostPhrase;
@@ -57,20 +41,16 @@ bool s_ghostPhraseActive = false;
 // ghosts continue sessions, they never start them: no sowing until a real
 // human act this session (a restored garden alone must stay silent)
 bool s_played = false;
-uint32_t s_greetAtMs = 0;  // the one waking-up note (soul), 0 = none
-uint32_t s_autosaveAtMs = 0;  // one atomic NVS snapshot before ghosts arrive
+uint32_t s_greetAtMs = 0;
+bool s_greetPending = false;
+uint32_t s_autosaveAtMs = 0;
+bool s_autosavePending = false;
 uint64_t s_keysHeld = 0;
+ambient::SaveRequest s_saveRequest = ambient::SaveRequest::None;
+ambient::BeatGrid s_beatGrid;
 
 // --- goodnight lullaby ---
-enum class Lull : uint8_t { None, Singing, Sleeping };
-Lull s_lull = Lull::None;
-uint32_t s_lullNextMs = 0;
-uint32_t s_lullSaveAtMs = 0;  // soul save, scheduled INTO the silence —
-                              // an NVS write stalls core 0 (flash cache)
-                              // and would scratch audibly mid-music
-float s_lullSlow = 1.0f;
-float s_lullVel = 0.0f;
-int s_lullIdx = 0;  // walks the garden oldest -> newest: the day, retold
+gk::LullabySequencer s_lullaby;
 constexpr int32_t kGhostIdBase = 1100;
 constexpr int32_t kLullabyVoiceId = 1104;
 // 7 s ciszy wystarczy — przy 12 s pamięć pudełka była praktycznie
@@ -102,65 +82,14 @@ uint32_t expDelayMs(float meanMs) {
   return (uint32_t)(-meanMs * logf(1.0f - 0.9999f * rnd01()));
 }
 
-const Mem& memoryAt(int idxOldest) {
-  const int idx =
-      (s_head - s_count + idxOldest + 2 * kGardenCap) % kGardenCap;
-  return s_ring[idx];
-}
+float gardenRandom(void*) { return rnd01(); }
 
 uint32_t replayGapMs(uint16_t recordedMs) {
-  // Same rhythm, made just legible enough for the slow ghost envelope.
-  if (recordedMs < 70) return 70;
-  if (recordedMs > 1200) return 1200;
-  return recordedMs;
-}
-
-bool phraseAtAnchor(ambient::GardenPhrase* out, int anchor) {
-  if (!out || anchor < 0 || anchor >= s_count) return false;
-  int first = anchor;
-  while (first > 0 && !memoryAt(first).phraseStart) --first;
-  int last = anchor;
-  while (last + 1 < s_count && !memoryAt(last + 1).phraseStart) ++last;
-
-  // A captured phrase is at most six notes, but this clamp also protects
-  // restored/future formats and a ring whose oldest phrase lost its head.
-  int window = first;
-  const int available = last - first + 1;
-  if (available > ambient::kGardenPhraseMax) {
-    window = anchor - ambient::kGardenPhraseMax / 2;
-    if (window < first) window = first;
-    const int latest = last - ambient::kGardenPhraseMax + 1;
-    if (window > latest) window = latest;
-  }
-  const int n =
-      available < ambient::kGardenPhraseMax ? available
-                                            : ambient::kGardenPhraseMax;
-  out->count = n;
-  for (int i = 0; i < n; ++i) {
-    const Mem& m = memoryAt(window + i);
-    out->note[i] = {m.cents, i == 0 ? (uint16_t)0 : m.gapMs};
-  }
-  return n > 0;
+  return gk::Garden::replayGapMs(recordedMs);
 }
 
 bool selectPhrase(ambient::GardenPhrase* out) {
-  if (!out || s_count == 0) return false;
-  ambient::GardenPhrase fallback;
-  for (int attempt = 0; attempt < 5; ++attempt) {
-    const float u = rnd01();
-    int back = (int)(u * u * (float)s_count);
-    if (back >= s_count) back = s_count - 1;
-    const int anchor = s_count - 1 - back;  // fresh phrases win more often
-    ambient::GardenPhrase candidate;
-    if (!phraseAtAnchor(&candidate, anchor)) continue;
-    if (fallback.count == 0) fallback = candidate;
-    if (candidate.count >= 2) {
-      *out = candidate;
-      return true;
-    }
-  }
-  *out = fallback;
-  return out->count > 0;
+  return s_garden.selectPhrase(out, gardenRandom, nullptr);
 }
 
 void scheduleNextGhost(uint32_t nowMs, bool firstAfterSilence) {
@@ -169,18 +98,20 @@ void scheduleNextGhost(uint32_t nowMs, bool firstAfterSilence) {
   uint32_t target = nowMs + delay;
   // The phrase starts on the remembered beat grid; its internal timing stays
   // exactly relative to the player instead of quantizing every note.
-  if (pulse::memoryPeriodSec() > 0.15) {
-    const double per = pulse::memoryPeriodSec();
-    const double nowSec = pulse::nowSec();
+  if (s_beatGrid.periodSec > 0.15) {
+    const double per = s_beatGrid.periodSec;
+    const double nowSec = s_beatGrid.nowSec;
     const double at = nowSec + (double)delay * 0.001;
     double snapped =
-        pulse::lastOnsetSec() + round((at - pulse::lastOnsetSec()) / per) * per;
+        s_beatGrid.lastOnsetSec +
+        round((at - s_beatGrid.lastOnsetSec) / per) * per;
     while (snapped < nowSec + 0.2) snapped += per;
     const double snappedDelayMs = (snapped - nowSec) * 1000.0;
     if (snappedDelayMs >= 0.0 && snappedDelayMs < 2147483647.0)
       target = nowMs + (uint32_t)snappedDelayMs;
   }
   s_nextGhostMs = target;
+  s_nextGhostPending = true;
 }
 
 int32_t allocateBgId() {
@@ -239,7 +170,8 @@ void weatherTick(uint32_t nowMs) {
 
   // background voting (default set only — a hand-picked chord is law;
   // asleep, the weather must not resurrect the tampura)
-  if (!s_bgCustom && s_bgOn && s_bgCount >= 2 && s_lull == Lull::None) {
+  if (!s_bgCustom && s_bgOn && s_bgCount >= 2 && !s_lullaby.active() &&
+      gk::backgroundPreset(s_bgPreset).weatherMorph) {
     int want = s_fifthVariant;
     if (t2 > 0.6f) want = 1;
     else if (t2 < -0.6f) want = 0;
@@ -255,7 +187,7 @@ void weatherTick(uint32_t nowMs) {
 
 void ghostSilenceAll() {
   s_ghostPhraseActive = false;
-  s_nextGhostMs = 0;
+  s_nextGhostPending = false;
   s_ghostEvent = false;
   // Pending note-offs carry reusable ids. Clear them together with the notes
   // so an old timer can never cut a later phrase that reused the same slot.
@@ -360,18 +292,18 @@ void ghostPhraseTick(uint32_t nowMs) {
 
 void gardenTick(uint32_t nowMs) {
   // the waking-up greeting: ONE remembered note, unless play began first
-  if (s_greetAtMs && (int32_t)(nowMs - s_greetAtMs) >= 0) {
-    s_greetAtMs = 0;
-    if (!s_played && s_count > 0) {
-      const int idx = (s_head - 1 + kGardenCap) % kGardenCap;  // freshest
-      ghostPlay(s_ring[idx].cents, s_ring[idx].cents, 0.30f, 0.65f, nowMs,
-                2200);
+  if (s_greetPending && (int32_t)(nowMs - s_greetAtMs) >= 0) {
+    s_greetPending = false;
+    if (!s_played && s_garden.count() > 0) {
+      const float freshest = s_garden.freshestCents();
+      ghostPlay(freshest, freshest, 0.30f, 0.65f, nowMs, 2200);
     }
   }
 
-  if (!s_played || nowMs - s_lastInputMs < kGhostIdleMs || s_count == 0) {
+  if (!s_played || nowMs - s_lastInputMs < kGhostIdleMs ||
+      s_garden.count() == 0) {
     if (s_ghostPhraseActive) ghostSilenceAll();
-    s_nextGhostMs = 0;
+    s_nextGhostPending = false;
     return;
   }
   if (s_ghostPhraseActive) {
@@ -380,7 +312,7 @@ void gardenTick(uint32_t nowMs) {
     ghostPhraseTick(nowMs);
     return;
   }
-  if (s_nextGhostMs == 0) {
+  if (!s_nextGhostPending) {
     scheduleNextGhost(nowMs, true);
     return;
   }
@@ -390,48 +322,29 @@ void gardenTick(uint32_t nowMs) {
 }
 
 void lullabyTick(uint32_t nowMs) {
-  if (s_lull == Lull::Sleeping) {
-    // the soul saves itself INTO the silence, once everything rang out
-    if (s_lullSaveAtMs && (int32_t)(nowMs - s_lullSaveAtMs) >= 0) {
-      // Settings normally flush while leaving their screen. Bedtime is the
-      // other natural stop, including the case where the box was laid down
-      // directly from that screen. Retry either atomic save only in silence.
-      const bool soulSaved = soul::save();
-      const bool settingsSaved = settings::save();
-      if (soulSaved && settingsSaved) s_lullSaveAtMs = 0;
-      else s_lullSaveAtMs = nowMs + 30000;
-    }
-    return;
+  const gk::LullabyEvent event = s_lullaby.tick(nowMs, s_garden);
+  switch (event.type) {
+    case gk::LullabyEventType::PlayNote:
+      lullabyPlay(event.cents, event.velocity);
+      // The world darkens and recedes as the remembered day winds down.
+      s_cutoffBase = ga::clampf(4200.0f * exp2f(-2.8f * event.progress),
+                               600.0f, 12000.0f);
+      s_spaceBase =
+          ga::clampf(0.50f + 0.18f * event.progress, 0.0f, 1.0f);
+      break;
+    case gk::LullabyEventType::EnterSleep:
+      // The day is retold — real sleep. Pending note-offs are cleared with
+      // their voices so no stale timer can leave a hum through the night.
+      for (int i = 0; i < s_bgCount; ++i) s_engine->noteOff(s_bg[i].id);
+      ghostSilenceAll();
+      break;
+    case gk::LullabyEventType::SaveDue:
+      if (s_saveRequest == ambient::SaveRequest::None)
+        s_saveRequest = ambient::SaveRequest::SoulAndSettings;
+      break;
+    case gk::LullabyEventType::None:
+      break;
   }
-  if (s_lull != Lull::Singing) return;
-  if ((int32_t)(nowMs - s_lullNextMs) < 0) return;
-  if (s_lullIdx >= s_count) {
-    // the day is retold — REAL sleep: the tampura bows out, the last
-    // lullaby ghosts are silenced too (their scheduled note-offs would
-    // otherwise never fire and the "silence" hummed a chord all night)
-    s_lull = Lull::Sleeping;
-    for (int i = 0; i < s_bgCount; ++i) s_engine->noteOff(s_bg[i].id);
-    ghostSilenceAll();
-    s_lullSaveAtMs = nowMs + 3000;  // save the day once the tails fade
-    return;
-  }
-  const int idx = (s_head - s_count + s_lullIdx + 2 * kGardenCap) % kGardenCap;
-  const bool more = s_lullIdx + 1 < s_count;
-  uint32_t gap = 1400;
-  if (more) {
-    const Mem& next = memoryAt(s_lullIdx + 1);
-    gap = next.phraseStart ? 1400 : replayGapMs(next.gapMs);
-  }
-  gap = (uint32_t)((float)gap * s_lullSlow);
-  lullabyPlay(s_ring[idx].cents, s_lullVel);
-  ++s_lullIdx;
-  s_lullNextMs = nowMs + gap;
-  s_lullSlow = fminf(1.8f, s_lullSlow * 1.06f);  // the phrases slowly exhale
-  s_lullVel = fmaxf(0.045f, s_lullVel * 0.88f);  // ...and truly fades away
-  // and the world darkens and recedes with it
-  const float prog = (float)s_lullIdx / (float)(s_count > 1 ? s_count : 1);
-  s_cutoffBase = ga::clampf(4200.0f * exp2f(-2.8f * prog), 600.0f, 12000.0f);
-  s_spaceBase = ga::clampf(0.50f + 0.18f * prog, 0.0f, 1.0f);
 }
 
 }  // namespace
@@ -445,32 +358,48 @@ void init(ga::Engine* engine) {
   backgroundApplyAll();
 }
 
-void tick() {
+void tick(const BeatGrid& beatGrid) {
   if (!s_engine) return;
+  s_beatGrid = beatGrid;
   const uint32_t now = millis();
   weatherTick(now);
   drainGhostOffs(now);  // in every state — ghosts must always ring out
-  if (s_autosaveAtMs && s_keysHeld == 0 && s_lull == Lull::None &&
+  if (s_saveRequest != SaveRequest::None) return;
+  if (s_autosavePending && s_keysHeld == 0 && !s_lullaby.active() &&
       (int32_t)(now - s_autosaveAtMs) >= 0) {
     // The soul is one 152-byte atomic blob now: one commit, five seconds
     // after the last captured note and before the first ghost at seven.
-    if (soul::save()) s_autosaveAtMs = 0;
-    else s_autosaveAtMs = now + 30000;
+    s_saveRequest = SaveRequest::Soul;
+    return;  // main saves before any ghost can begin in this pass
   }
-  if (s_lull == Lull::None) gardenTick(now);  // the lullaby owns the night
+  if (!s_lullaby.active()) gardenTick(now);  // the lullaby owns the night
   else lullabyTick(now);
+}
+
+SaveRequest saveRequest() { return s_saveRequest; }
+
+void saveFinished(SaveRequest request, bool success) {
+  if (request == SaveRequest::None || request != s_saveRequest) return;
+  const uint32_t now = millis();
+  if (request == SaveRequest::Soul) {
+    if (success) {
+      s_autosavePending = false;
+    } else {
+      s_autosaveAtMs = now + 30000;
+      s_autosavePending = true;
+    }
+  } else {
+    if (success) s_autosavePending = false;
+    s_lullaby.acknowledgeSave(success, now);
+  }
+  s_saveRequest = SaveRequest::None;
 }
 
 bool lullabyStart() {
   // only after real play this session, only with something to sing
-  if (s_lull != Lull::None || !s_played || s_count == 0) return false;
-  s_lull = Lull::Singing;
-  s_lullIdx = 0;
-  s_lullSlow = 1.0f;
-  s_lullVel = 0.18f;
+  if (!s_lullaby.start(millis(), s_played, s_garden)) return false;
   // Let the released daytime drone fade before the first remembered phrase;
   // otherwise its two tails stack under the opening and sound twice as big.
-  s_lullNextMs = millis() + 1200;
   // Do not let the first note arrive through the daytime-bright filter. The
   // rest of the retelling keeps darkening from this gentler starting point.
   s_cutoffBase = 4200.0f;
@@ -483,16 +412,17 @@ bool lullabyStart() {
 }
 
 void lullabyAbort() {
-  if (s_lull == Lull::None) return;
-  s_lull = Lull::None;
-  s_lullSaveAtMs = 0;  // aborted before sleep: next settings visit saves
+  if (!s_lullaby.active()) return;
+  s_lullaby.abort();
+  if (s_saveRequest == SaveRequest::SoulAndSettings)
+    s_saveRequest = SaveRequest::None;
   ghostSilenceAll();
   s_cutoffBase = 7500.0f;  // the mode re-drives both from the next IMU step
   s_spaceBase = 0.5f;
   backgroundApplyAll();  // the tampura comes back with the morning
 }
 
-bool lullabyActive() { return s_lull != Lull::None; }
+bool lullabyActive() { return s_lullaby.active(); }
 
 void notePresence() {
   const uint32_t now = millis();
@@ -500,10 +430,10 @@ void notePresence() {
   // A wind replay can last a little over six seconds. If a five-second soul
   // snapshot from the preceding key phrase is still pending, move it beyond
   // the whole gesture so flash parking never cuts a remembered sentence.
-  if (s_autosaveAtMs) s_autosaveAtMs = now + 7000;
+  if (s_autosavePending) s_autosaveAtMs = now + 7000;
   s_played = true;
-  s_greetAtMs = 0;  // the child is already here — no greeting needed
-  if (s_lull != Lull::None) lullabyAbort();  // a key always wakes the box
+  s_greetPending = false;  // the child is already here — no greeting needed
+  if (s_lullaby.active()) lullabyAbort();  // a key always wakes the box
   ghostSilenceAll();
 }
 
@@ -516,39 +446,18 @@ void keyState(int id, bool down) {
     s_keysHeld &= ~mask;
     // A long sustain may outlive the original five-second deadline. Give its
     // release and echo a full quiet breath before touching flash.
-    if (s_keysHeld == 0 && s_autosaveAtMs) s_autosaveAtMs = millis() + 5000;
+    if (s_keysHeld == 0 && s_autosavePending)
+      s_autosaveAtMs = millis() + 5000;
   }
 }
 
 void gardenPush(float cents) {
   const uint32_t now = millis();
-  const uint32_t gap = s_haveLiveOnset ? now - s_lastGardenMs : 0;
-  const bool startsPhrase =
-      !s_haveLiveOnset || gap >= kPhraseBreakMs ||
-      s_captureNotes >= ambient::kGardenPhraseMax ||
-      now - s_captureStartedMs >= kPhraseMaxDurationMs;
-  const uint16_t storedGap = startsPhrase ? 0 : (uint16_t)gap;
-  s_ring[s_head] = {cents, storedGap, startsPhrase};
-  s_head = (s_head + 1) % kGardenCap;
-  if (s_count < kGardenCap) {
-    ++s_count;
-  } else {
-    // The new logical oldest may be the middle of an overwritten phrase.
-    // Make it a valid beginning instead of pointing outside the ring.
-    s_ring[s_head].phraseStart = true;
-    s_ring[s_head].gapMs = 0;
-  }
-  if (startsPhrase) {
-    s_captureStartedMs = now;
-    s_captureNotes = 1;
-  } else {
-    ++s_captureNotes;
-  }
-  s_lastGardenMs = now;
-  s_haveLiveOnset = true;
+  s_garden.push(cents, now);
   s_lastInputMs = now;
   s_autosaveAtMs = now + 5000;
-  s_greetAtMs = 0;
+  s_autosavePending = true;
+  s_greetPending = false;
   // Every garden producer is a human act. Any played phrase can therefore
   // earn ghosts and the goodnight lullaby, just like on the host.
   s_played = true;
@@ -556,61 +465,34 @@ void gardenPush(float cents) {
 }
 
 bool gardenPluck(GardenPhrase* phrase, float dir) {
-  if (!selectPhrase(phrase)) return false;
-  const float r = rnd01();
-  // replay-first stays law (hardware verdict: transpositions blurred the
-  // phrase) — but one coherent seasoning follows the hand, preserving every
-  // interval and contour instead of randomizing the notes independently.
-  float transpose = 0.0f;
-  if (r >= 0.78f)
-    transpose = dir >= 0.0f ? (r < 0.92f ? 1200.0f : 702.0f)
-                            : (r < 0.92f ? -498.0f : -1200.0f);
-  for (int i = 0; i < phrase->count; ++i)
-    phrase->note[i].cents += transpose;
-  return true;
+  return s_garden.pluck(phrase, dir, gardenRandom, nullptr);
 }
 
-int gardenCount() { return s_count; }
+int gardenCount() { return s_garden.count(); }
 
-int gardenPhraseCount() {
-  int n = 0;
-  for (int i = 0; i < s_count; ++i)
-    if (i == 0 || memoryAt(i).phraseStart) ++n;
-  return n;
-}
+int gardenPhraseCount() { return s_garden.phraseCount(); }
 
-float gardenCents(int idxOldest) {
-  if (idxOldest < 0 || idxOldest >= s_count) return 0.0f;
-  return memoryAt(idxOldest).cents;
-}
+float gardenCents(int idxOldest) { return s_garden.cents(idxOldest); }
 
 uint16_t gardenDelayMs(int idxOldest) {
-  if (idxOldest < 0 || idxOldest >= s_count) return 0;
-  return memoryAt(idxOldest).gapMs;
+  return s_garden.delayMs(idxOldest);
 }
 
 bool gardenStartsPhrase(int idxOldest) {
-  if (idxOldest < 0 || idxOldest >= s_count) return false;
-  return idxOldest == 0 || memoryAt(idxOldest).phraseStart;
+  return s_garden.startsPhrase(idxOldest);
 }
 
 void gardenRestore(const float* cents, const uint16_t* delayMs,
                    uint32_t phraseStartMask, int n) {
-  if (n < 0) n = 0;
-  if (n > kGardenCap) n = kGardenCap;
-  for (int i = 0; i < n; ++i) {
-    const bool starts = i == 0 || (phraseStartMask & (1u << i));
-    s_ring[i] = {cents[i], starts ? (uint16_t)0 : delayMs[i], starts};
-  }
-  s_head = n % kGardenCap;
-  s_count = n;
-  s_haveLiveOnset = false;  // tomorrow's first note starts a fresh phrase
-  s_captureNotes = 0;
+  s_garden.restore(cents, delayMs, phraseStartMask, n);
   // deliberately NOT s_played — a restored garden waits for a human act
 }
 
 void scheduleGreeting() {
-  if (s_count > 0 && !s_played) s_greetAtMs = millis() + 2500;
+  if (s_garden.count() > 0 && !s_played) {
+    s_greetAtMs = millis() + 2500;
+    s_greetPending = true;
+  }
 }
 
 void backgroundToggleNote(float cents) {
@@ -634,17 +516,37 @@ void backgroundToggleNote(float cents) {
   if (s_bgOn) bgNoteOn(id, cents, s_bgCount == 1 ? 0.22f : 0.16f);
 }
 
-void backgroundSetEnabled(bool on) {
-  s_bgOn = on;
+void backgroundSetPreset(gk::BackgroundId preset) {
+  const gk::BackgroundPreset& selected = gk::backgroundPreset(preset);
+  const bool removedCustomChord = s_bgCustom;
+  for (int i = 0; i < s_bgCount; ++i) s_engine->noteOff(s_bg[i].id);
+
+  s_bgCount = 0;
+  s_bgCustom = false;
+  s_bgPreset = selected.id;
+  s_bgOn = selected.noteCount > 0;
+  s_fifthVariant = 0;
+  for (int i = 0; i < selected.noteCount; ++i) {
+    const int32_t id = allocateBgId();
+    s_bg[s_bgCount++] = {selected.cents[i], id};
+  }
+  for (int i = s_bgCount; i < 4; ++i) s_bg[i] = {0.0f, -1};
   backgroundApplyAll();
+  // A custom chord lives in the Soul snapshot, whereas the built-in preset
+  // lives in Settings. Clearing the former must eventually update both stores.
+  if (removedCustomChord) {
+    s_autosaveAtMs = millis() + 5000;
+    s_autosavePending = true;
+  }
 }
+
+gk::BackgroundId backgroundSelectedPreset() { return s_bgPreset; }
 
 void backgroundRefresh() {
   // A mode switch sends all-notes-off. Do not let its cleanup resurrect the
   // tampura while the goodnight ritual owns the box; wake-up restores it.
-  if (s_lull == Lull::None) backgroundApplyAll();
+  if (!s_lullaby.active()) backgroundApplyAll();
 }
-bool backgroundEnabled() { return s_bgOn; }
 int backgroundCount() { return s_bgCount; }
 bool backgroundIsCustom() { return s_bgCustom; }
 

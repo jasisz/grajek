@@ -7,24 +7,33 @@
 #include <stdint.h>
 
 #include "ga_engine.h"
+#include "gk_background.h"
+#include "gk_garden.h"
 
 namespace ambient {
 
-constexpr int kGardenCapacity = 32;
-constexpr int kGardenPhraseMax = 6;
+constexpr int kGardenCapacity = gk::kGardenCapacity;
+constexpr int kGardenPhraseMax = gk::kGardenPhraseMax;
+using GardenPhraseNote = gk::GardenPhraseNote;
+using GardenPhrase = gk::GardenPhrase;
 
-struct GardenPhraseNote {
-  float cents;
-  uint16_t gapMs;  // onset distance from the previous note; first = 0
+// The app coordinator supplies the remembered beat grid. Ambient no longer
+// reaches back into the pulse module, which keeps the dependency graph one-way.
+struct BeatGrid {
+  double nowSec = 0.0;
+  double periodSec = 0.0;
+  double lastOnsetSec = 0.0;
 };
 
-struct GardenPhrase {
-  GardenPhraseNote note[kGardenPhraseMax];
-  int count = 0;
-};
+enum class SaveRequest : uint8_t { None, Soul, SoulAndSettings };
 
 void init(ga::Engine* engine);
-void tick();  // call once per main-loop pass
+void tick(const BeatGrid& beatGrid);  // call once per main-loop pass
+
+// Persistence is an application-level side effect. Ambient only schedules a
+// natural quiet point; main performs the actual NVS writes and reports back.
+SaveRequest saveRequest();
+void saveFinished(SaveRequest request, bool success);
 
 // presence: any human key press pauses ghost sowing and bows out ghosts
 void notePresence();
@@ -62,11 +71,12 @@ bool lullabyStart();  // false when this session has nothing to remember
 void lullabyAbort();   // lifted / played: wake now
 bool lullabyActive();  // Singing or the sleeping silence after
 
-// Background chord (default 1/1 + 3/2). The custom-chord hooks are retained
-// for alternate controllers; the current device UI only toggles the default.
+// Background presets are a fixed descriptor registry: silence, root, the
+// breathing fifth drone (default), and a three-note harmonic-seventh halo.
+// Custom-chord hooks remain for alternate controllers and old soul snapshots.
 void backgroundToggleNote(float cents);
-void backgroundSetEnabled(bool on);
-bool backgroundEnabled();
+void backgroundSetPreset(gk::BackgroundId preset);
+gk::BackgroundId backgroundSelectedPreset();
 int backgroundCount();
 bool backgroundIsCustom();
 // Soul: restore an optional custom chord from NVS (marks it as law); n=0

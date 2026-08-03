@@ -1,0 +1,9 @@
+{
+  "name": "grajek_core",
+  "version": "0.1.0",
+  "description": "Hardware-independent state models shared by grajek firmware and host tools",
+  "build": {
+    "includeDir": "src",
+    "srcDir": "src"
+  }
+}

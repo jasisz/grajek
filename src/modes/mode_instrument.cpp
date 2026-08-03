@@ -6,6 +6,7 @@
 #include "../ambient.h"
 #include "../firefly.h"
 #include "../goodnight.h"
+#include "../i18n.h"
 #include "../pulse.h"
 #include "../settings.h"
 #include "../viz.h"
@@ -88,7 +89,7 @@ void ModeInstrument::enter(ModeCtx& ctx) {
   static bool s_greeted = false;
   if (!s_greeted) {
     s_greeted = true;
-    viz::toast("graj!");
+    viz::toast(i18n::tr(i18n::TextId::PlayGreeting));
   }
   markDirty();
 }
@@ -129,7 +130,7 @@ void ModeInstrument::onGoHold(ModeCtx& ctx) {
   // przytrzymany GO: następna barwa, z dużym napisem zamiast tabelki stanu
   settings::cyclePreset();
   settings::applyToEngine(ctx.engine);
-  viz::toast(settings::presetName(settings::preset()));
+  viz::toast(i18n::presetName(settings::preset()));
 }
 
 void ModeInstrument::triggerChime(ModeCtx& ctx, float energy, float dir) {

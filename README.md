@@ -61,9 +61,10 @@ playing and the day's phrases sing themselves to sleep.
   grid tuned to the *physical* keyboard stagger (4-T-F-C is one chord),
   and the EDO scales lifted an octave into the same register as the JI
   scales.
-- The host phrase model and hardware-independent face-down dwell have tests;
-  the firmware build covers their device integration, which still deserves a
-  physical-device pass.
+- The shared garden, pulse, lullaby and background-preset models, both LCD
+  languages, the scale registry and the hardware-independent face-down dwell
+  have host tests. Both firmware languages are also built end to end; device
+  integration still deserves a physical-device pass.
 
 ---
 
@@ -77,6 +78,8 @@ lib/grajek_audio/   synthesis engine — pure C++17, ZERO hardware dependencies
                      scales: 12/19/31-EDO + 11-limit just intonation,
                      lock-free event queue; the same code runs on the ESP32
                      and on a laptop)
+lib/grajek_core/    pure state models shared by device and host: phrase garden,
+                    pulse entrainment, goodnight sequencer, background presets
 host/               PC targets for shaping the sound without flashing
 src/                ESP32 firmware (PlatformIO / Arduino core 3.x):
   hal/              I2S speaker output + ES8311, verified board pins
@@ -86,6 +89,7 @@ src/                ESP32 firmware (PlatformIO / Arduino core 3.x):
   pulse.cpp         the heart: tempo entrainment (a PLL on key presses)
   soul.cpp          what survives the power switch (garden/chord/pulse, NVS)
   firefly.cpp       the WS2812 firefly + battery dusk
+  i18n.cpp          compile-time LCD text (Polish default, English variant)
   settings.cpp      shared musical state (scale/timbre/octave/scene), in NVS
   main.cpp          main loop; boots straight into playing
 ```
@@ -96,7 +100,7 @@ src/                ESP32 firmware (PlatformIO / Arduino core 3.x):
 cd host
 make play        # grajek_live — REAL-TIME playing via CoreAudio (macOS)
 make run         # grajek_host — renders demo WAVs into host/out/
-make test        # face-down state machine + phrase boundaries/timing
+make test        # shared state, registries, PL/EN text and face-down gesture
 afplay out/01_single_note.wav
 ```
 
@@ -142,12 +146,16 @@ PlatformIO lives in a project-local uv environment (`.venv`, gitignored):
 ```bash
 uv venv .venv
 uv pip install --python .venv/bin/python platformio==6.1.19 pip==26.2 pyyaml==6.0.3  # once
-.venv/bin/pio run -e cardputer-adv -t upload
+.venv/bin/pio run -e cardputer-adv -t upload     # Polish (default)
+.venv/bin/pio run -e cardputer-adv-en -t upload  # English
 .venv/bin/pio device monitor
 ```
 
 `platformio.ini` pins the pioarduino platform to **55.03.311** so device
-builds use one reproducible Arduino/ESP-IDF toolchain.
+builds use one reproducible Arduino/ESP-IDF toolchain. The display language
+is selected only while compiling: `cardputer-adv` is Polish and
+`cardputer-adv-en` is English. It does not add a language setting or alter the
+saved NVS format.
 
 ### Playing it: there is no menu
 
@@ -171,7 +179,10 @@ Everything else hangs off the one side button:
 The settings screen (short BtnGO) has five rows, each cycled by its digit
 and persisted in NVS: **scale** (ordered happy → strange: pentatonic JI,
 just major, 12-EDO, 19-EDO, 31-EDO, 11-limit Partch, WOLF), **timbre**,
-**octave**, **background drone**, **visualization scene**.
+**octave**, **background layer** (off → root → the breathing fifth drone → a
+root/fifth/harmonic-seventh halo; shown in Polish as *cisza / fundament /
+dron / aureola*), and
+**visualization scene**.
 
 Two design laws are enforced here rather than explained: the shake plays
 *remembered phrases* instead of a scale, so the keyboard and the gesture
@@ -249,6 +260,13 @@ quotes in `src/hal/board_pins.h`.
   octave), and the digit row maps to `col+1` because the physical top row
   is staggered one key to the right — the column the **eye** sees
   (4-T-F-C) is the column that plays one chord.
+- Scales, visual scenes and background layers use small static descriptor
+  registries. There is no dynamic loader or heap-backed plugin system on the
+  instrument; adding an option remains modular while IDs and NVS ordering stay
+  explicit and testable.
+- Polish and English LCD strings are selected at compile time. A firmware
+  image contains one language only, so the device carries no locale setting or
+  duplicate runtime language state.
 
 ## What to check after flashing
 
@@ -257,7 +275,9 @@ quotes in `src/hal/board_pins.h`.
 2. Keys stay clean **with no clicks/dropouts** while the UI is stressed —
    hold several keys, shake, switch scenes.
 3. Short BtnGO opens settings and returns; holding it while playing cycles
-   the timbre; every choice survives a power cycle (NVS).
+   the timbre; background cycles through silence, root, drone and halo; every
+   choice survives a power cycle (NVS). Old boolean background settings migrate
+   to silence or the original drone.
 4. Shaking replays one remembered phrase per swing (with the captured
    rhythm, not an instant burst), and waving left/right steers the whole
    phrase down/up; both tilts respond smoothly

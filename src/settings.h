@@ -8,6 +8,7 @@
 #include "ga_engine.h"
 #include "ga_scales.h"
 #include "ga_voice.h"
+#include "gk_background.h"
 
 namespace settings {
 
@@ -18,7 +19,7 @@ ga::ScaleId scale();
 int preset();        // indeks barwy (kNumTimbrePresets)
 int octave();        // indeks do {55, 110, 220, 440} Hz
 float baseHz();      // częstotliwość centrum wynikająca z oktawy
-bool backgroundOn();
+gk::BackgroundId backgroundPreset();
 int vizScene();      // scena wizualizacji (viz::kSceneCount)
 
 const char* presetName(int idx);
@@ -28,7 +29,7 @@ const char* presetName(int idx);
 void cycleScale();
 void cyclePreset();
 void cycleOctave();
-void toggleBackground();
+void cycleBackground();
 void cycleVizScene();
 
 // wciska aktualny stan w silnik + struny + ambient (po zmianie i na starcie)

@@ -6,6 +6,7 @@
 #include "../ambient.h"
 #include "../firefly.h"
 #include "../goodnight.h"
+#include "../i18n.h"
 #include "../settings.h"
 #include "../soul.h"
 #include "../viz.h"
@@ -19,7 +20,13 @@ void ModeSettings::enter(ModeCtx&) {
   markDirty();
 }
 
-void ModeSettings::exit(ModeCtx&) { settings::save(); }
+void ModeSettings::exit(ModeCtx&) {
+  // Choosing a built-in background replaces a soul-restored custom chord.
+  // Persist that removal in the same quiet mode-switch window, otherwise the
+  // stale custom chord would win again on the next boot.
+  soul::save();
+  settings::save();
+}
 
 void ModeSettings::onKey(ModeCtx& ctx, int col, int row, bool down) {
   if (!down) return;
@@ -36,7 +43,7 @@ void ModeSettings::onKey(ModeCtx& ctx, int col, int row, bool down) {
       settings::cycleOctave();
       settings::applyToEngine(ctx.engine);
       break;
-    case 4: settings::toggleBackground(); break;
+    case 4: settings::cycleBackground(); break;
     case 5: settings::cycleVizScene(); break;
     default: return;
   }
@@ -76,21 +83,26 @@ void ModeSettings::draw(ModeCtx& ctx) {
 
   g.setTextSize(2);
   g.setTextColor(TFT_ORANGE, TFT_BLACK);
-  g.drawString("ustawienia", 6, 4);
+  g.drawString(i18n::tr(i18n::TextId::SettingsTitle), 6, 4);
   g.setTextSize(1);
   g.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  g.drawString("GO = graj", 172, 12);
+  g.drawString(i18n::tr(i18n::TextId::GoPlay), 172, 12);
 
   // krótkie etykiety: przy rozmiarze 2 kolumna wartości startuje na 100 px,
   // a najdłuższa nazwa skali ("JI 11-limit") kończy się dokładnie w kadrze
-  const char* labels[5] = {"1 skala", "2 barwa", "3 okt.", "4 tlo",
-                           "5 scena"};
+  const char* labels[5] = {
+      i18n::tr(i18n::TextId::LabelScale),
+      i18n::tr(i18n::TextId::LabelTimbre),
+      i18n::tr(i18n::TextId::LabelOctave),
+      i18n::tr(i18n::TextId::LabelBackground),
+      i18n::tr(i18n::TextId::LabelScene),
+  };
   const char* values[5];
-  values[0] = ga::scaleInfo(settings::scale()).name;
+  values[0] = i18n::scaleName(settings::scale());
   values[1] = settings::presetName(settings::preset());
   snprintf(buf, sizeof buf, "%d Hz", (int)settings::baseHz());
   values[2] = buf;
-  values[3] = settings::backgroundOn() ? "gra" : "cicho";
+  values[3] = i18n::backgroundName(settings::backgroundPreset());
   values[4] = viz::sceneName(settings::vizScene());
 
   g.setTextSize(2);

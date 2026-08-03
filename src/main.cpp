@@ -111,7 +111,6 @@ void setup() {
   // zapamiętane wybory (skala, barwa, oktawa, tło) wracają po włączeniu
   settings::load();
   settings::applyToEngine(engine);
-  if (!settings::backgroundOn()) ambient::backgroundSetEnabled(false);
   // ...i dusza: ogród wspomnień, własne tło, puls — z jednym cichym
   // powitaniem wczorajszą nutą (patrz soul.h)
   soul::load();
@@ -204,8 +203,28 @@ void loop() {
     lastFrameMs = now;
   }
 
-  ambient::tick();
-  pulse::tick();
+  const ambient::BeatGrid beatGrid{pulse::nowSec(),
+                                   pulse::memoryPeriodSec(),
+                                   pulse::lastOnsetSec()};
+  ambient::tick(beatGrid);
+
+  // Ambient chooses a musically safe instant; the app coordinator owns the
+  // side effect. This removes the ambient <-> persistence dependency cycle.
+  const ambient::SaveRequest saveRequest = ambient::saveRequest();
+  if (saveRequest != ambient::SaveRequest::None) {
+    const bool soulSaved = soul::save();
+    bool settingsSaved = true;
+    if (saveRequest == ambient::SaveRequest::SoulAndSettings)
+      settingsSaved = settings::save();
+    ambient::saveFinished(saveRequest, soulSaved && settingsSaved);
+  }
+
+  float pulseChord[4];
+  const int pulseChordCount = ambient::backgroundNoteCount();
+  for (int i = 0; i < pulseChordCount && i < 4; ++i)
+    pulseChord[i] = ambient::backgroundNoteCents(i);
+  pulse::tick(ambient::lullabyActive(), pulseChord, pulseChordCount,
+              settings::preset());
   firefly::tick();
 
   delay(2);  // breathing room for WDT/USB; audio lives on the other core anyway

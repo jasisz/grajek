@@ -29,21 +29,6 @@ const float* ji11Cents() {
 
 int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-// The EDO grids climb by fourths, so their 4x14 keys span only ~1.7-2.3
-// octaves against ~3.3-3.9 for the octave-row scales — switching from PENTA
-// to any EDO dropped the whole keyboard by more than an octave ("EDO sounds
-// too low"). Lifting the EDO grids one octave puts their centre back where
-// the child's ear already lives.
-float registerLift(ScaleId s) {
-  switch (s) {
-    case ScaleId::EDO12:
-    case ScaleId::EDO19:
-    case ScaleId::EDO31:
-    case ScaleId::WOLF:  return 1200.0f;  // WOLF's rows are narrow too
-    default:             return 0.0f;
-  }
-}
-
 // The "happy" subsets, in pure intonation:
 // major pentatonic 1/1 9/8 5/4 3/2 5/3 — the kalimba/wind-chime scale
 const float kPenta[5] = {0.0f, 203.9f, 386.3f, 702.0f, 884.4f};
@@ -56,71 +41,144 @@ float stepTable(const float* t, int n, int degree) {
   return t[degree % n] + 1200.0f * (float)oct;
 }
 
+// Scale implementations. The EDO grids climb by fourths, so their 4x14 keys
+// span only ~1.7-2.3 octaves against ~3.3-3.9 for the octave-row scales. Their
+// one-octave lift keeps the keyboard centre near the happy JI scales.
+float edo12Step(int step) { return 1200.0f + (float)step * 100.0f; }
+float edo19Step(int step) {
+  return 1200.0f + (float)step * (1200.0f / 19.0f);
+}
+float edo31Step(int step) {
+  return 1200.0f + (float)step * (1200.0f / 31.0f);
+}
+float ji11Step(int step) {
+  return ji11Cents()[step % kGridCols] +
+         1200.0f * (float)(step / kGridCols);
+}
+float pentaStep(int step) { return stepTable(kPenta, 5, step); }
+float majorStep(int step) { return stepTable(kMajor, 7, step); }
+float wolfStep(int step) { return 1200.0f + (float)step * 62.0f; }
+
+float edo12Grid(int col, int row) {
+  return 1200.0f + (float)(col + row * 5) * 100.0f;
+}
+float edo19Grid(int col, int row) {
+  return 1200.0f + (float)(col + row * 8) * (1200.0f / 19.0f);
+}
+float edo31Grid(int col, int row) {
+  return 1200.0f + (float)(col + row * 13) * (1200.0f / 31.0f);
+}
+float ji11Grid(int col, int row) {
+  return ji11Cents()[col] + (float)row * 1200.0f;
+}
+float pentaGrid(int col, int row) {
+  return stepTable(kPenta, 5, col + row * 2);
+}
+float majorGrid(int col, int row) {
+  return stepTable(kMajor, 7, col + row * 2);
+}
+float wolfGrid(int col, int row) {
+  // Quarter-tone-ish clusters, rows a sour near-tritone apart. The only
+  // "fifth" (column difference 11) is the historical 682-cent wolf.
+  return 1200.0f + (float)col * 62.0f + (float)row * 637.0f;
+}
+
+// Preserve the old default arms exactly. They intentionally differ from the
+// EDO12 plugin: an invalid ID has no register lift, and its grid ignores rows.
+float invalidStep(int step) { return (float)step * 100.0f; }
+float invalidGrid(int col, int) { return (float)col * 100.0f; }
+
+// Discovery order is part of the firmware's legacy NVS format ("skala" stores
+// this array index), whereas ScaleId itself is persisted by the host.
+constexpr ScalePlugin kScalePlugins[] = {
+    {ScaleId::PENTA,
+     {"PENTA JI", "major pentatonic, row = +2 steps (thirds)"},
+     5, pentaStep, pentaGrid},
+    {ScaleId::MAJOR,
+     {"MAJOR JI", "just major, row = +2 steps (thirds)"},
+     7, majorStep, majorGrid},
+    {ScaleId::EDO12,
+     {"12-EDO", "row = +5 steps (fourth)"},
+     12, edo12Step, edo12Grid},
+    {ScaleId::EDO19,
+     {"19-EDO", "row = +8 steps (fourth)"},
+     19, edo19Step, edo19Grid},
+    {ScaleId::EDO31,
+     {"31-EDO", "row = +13 steps (fourth)"},
+     31, edo31Step, edo31Grid},
+    {ScaleId::JI11,
+     {"JI 11-limit", "14 ratios/octave, row = +octave"},
+     kGridCols, ji11Step, ji11Grid},
+    {ScaleId::WOLF,
+     {"WOLF", "62 c steps, row = +637 c - nothing is pure"},
+     19, wolfStep, wolfGrid},
+};
+
+constexpr size_t kNumScalePlugins =
+    sizeof(kScalePlugins) / sizeof(kScalePlugins[0]);
+
+// Public compatibility fallback for an invalid ScaleId.
+constexpr ScalePlugin kInvalidScale = {
+    ScaleId::EDO12,
+    {"12-EDO", "row = +5 steps (fourth)"},
+    12,
+    invalidStep,
+    invalidGrid,
+};
+
+static_assert((uint8_t)ScaleId::EDO12 == 0 &&
+                  (uint8_t)ScaleId::EDO19 == 1 &&
+                  (uint8_t)ScaleId::EDO31 == 2 &&
+                  (uint8_t)ScaleId::JI11 == 3 &&
+                  (uint8_t)ScaleId::PENTA == 4 &&
+                  (uint8_t)ScaleId::MAJOR == 5 &&
+                  (uint8_t)ScaleId::WOLF == 6 &&
+                  (uint8_t)ScaleId::Count == 7,
+              "ScaleId values are a persistence format");
+static_assert(kNumScalePlugins == (size_t)ScaleId::Count,
+              "every persisted ScaleId needs exactly one plugin");
+static_assert(kScalePlugins[0].id == ScaleId::PENTA &&
+                  kScalePlugins[1].id == ScaleId::MAJOR &&
+                  kScalePlugins[2].id == ScaleId::EDO12 &&
+                  kScalePlugins[3].id == ScaleId::EDO19 &&
+                  kScalePlugins[4].id == ScaleId::EDO31 &&
+                  kScalePlugins[5].id == ScaleId::JI11 &&
+                  kScalePlugins[6].id == ScaleId::WOLF,
+              "scale plugin order is the legacy firmware NVS format");
+
 }  // namespace
 
-const ScaleInfo& scaleInfo(ScaleId s) {
-  static const ScaleInfo infos[(int)ScaleId::Count] = {
-      {"12-EDO", "row = +5 steps (fourth)"},
-      {"19-EDO", "row = +8 steps (fourth)"},
-      {"31-EDO", "row = +13 steps (fourth)"},
-      {"JI 11-limit", "14 ratios/octave, row = +octave"},
-      {"PENTA JI", "major pentatonic, row = +2 steps (thirds)"},
-      {"MAJOR JI", "just major, row = +2 steps (thirds)"},
-      {"WOLF", "62 c steps, row = +637 c - nothing is pure"},
-  };
-  int i = (int)s;
-  if (i < 0 || i >= (int)ScaleId::Count) i = 0;
-  return infos[i];
+size_t scalePluginCount() { return kNumScalePlugins; }
+
+const ScalePlugin& scalePluginAt(size_t index) {
+  return index < kNumScalePlugins ? kScalePlugins[index] : kScalePlugins[0];
 }
 
-int scaleStepsPerOctave(ScaleId s) {
-  switch (s) {
-    case ScaleId::EDO12: return 12;
-    case ScaleId::EDO19: return 19;
-    case ScaleId::EDO31: return 31;
-    case ScaleId::JI11:  return kGridCols;
-    case ScaleId::PENTA: return 5;
-    case ScaleId::MAJOR: return 7;
-    case ScaleId::WOLF:  return 19;  // ~1200/62, close enough for the ladder
-    default:             return 12;
-  }
+const ScalePlugin& scalePlugin(ScaleId id) {
+  for (size_t i = 0; i < kNumScalePlugins; ++i)
+    if (kScalePlugins[i].id == id) return kScalePlugins[i];
+  return kInvalidScale;
 }
+
+size_t scalePluginIndex(ScaleId id) {
+  for (size_t i = 0; i < kNumScalePlugins; ++i)
+    if (kScalePlugins[i].id == id) return i;
+  return 0;
+}
+
+const ScaleInfo& scaleInfo(ScaleId s) { return scalePlugin(s).info; }
+
+int scaleStepsPerOctave(ScaleId s) { return scalePlugin(s).stepsPerOctave; }
 
 float scaleStepCents(ScaleId s, int step) {
   if (step < 0) step = 0;
-  const float lift = registerLift(s);
-  switch (s) {
-    case ScaleId::EDO12: return lift + (float)step * 100.0f;
-    case ScaleId::EDO19: return lift + (float)step * (1200.0f / 19.0f);
-    case ScaleId::EDO31: return lift + (float)step * (1200.0f / 31.0f);
-    case ScaleId::JI11:
-      return ji11Cents()[step % kGridCols] +
-             1200.0f * (float)(step / kGridCols);
-    case ScaleId::PENTA: return stepTable(kPenta, 5, step);
-    case ScaleId::MAJOR: return stepTable(kMajor, 7, step);
-    case ScaleId::WOLF:  return lift + (float)step * 62.0f;
-    default:             return (float)step * 100.0f;
-  }
+  return scalePlugin(s).stepFn(step);
 }
 
 float gridToCents(ScaleId s, int col, int row) {
   col = clampi(col, 0, kGridCols - 1);
   row = clampi(row, 0, kGridRows - 1);
-  const float lift = registerLift(s);
-  switch (s) {
-    case ScaleId::EDO12: return lift + (float)(col + row * 5) * 100.0f;
-    case ScaleId::EDO19: return lift + (float)(col + row * 8) * (1200.0f / 19.0f);
-    case ScaleId::EDO31: return lift + (float)(col + row * 13) * (1200.0f / 31.0f);
-    case ScaleId::JI11:  return ji11Cents()[col] + (float)row * 1200.0f;
-    case ScaleId::PENTA: return stepTable(kPenta, 5, col + row * 2);
-    case ScaleId::MAJOR: return stepTable(kMajor, 7, col + row * 2);
-    // WOLF: quarter-tone-ish clusters, rows a sour near-tritone apart;
-    // no column pair lands near a pure octave, and "the fifth" (col
-    // diff 11) is the 682 c wolf that gave meantone tuners nightmares
-    case ScaleId::WOLF:
-      return lift + (float)col * 62.0f + (float)row * 637.0f;
-    default:             return (float)col * 100.0f;
-  }
+  return scalePlugin(s).gridFn(col, row);
 }
 
 }  // namespace ga

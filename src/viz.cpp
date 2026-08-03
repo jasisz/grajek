@@ -102,6 +102,10 @@ float s_tilt = 0.0f;   // boczny (jasność)
 float s_depth = 0.0f;  // do/od siebie (przestrzeń)
 int s_scene = 0;
 
+constexpr int normalizeSceneIndex(int idx) {
+  return ((idx % viz::kSceneCount) + viz::kSceneCount) % viz::kSceneCount;
+}
+
 char s_toast[24] = {0};
 float s_toastT = 0.0f;
 uint32_t s_lastMs = 0;
@@ -125,15 +129,7 @@ void dropSeed(int x) {
 
 namespace viz {
 
-const char* sceneName(int idx) {
-  static const char* names[kSceneCount] = {"laka", "kosmos", "ocean", "ognie",
-                                           "mandala"};
-  return names[((idx % kSceneCount) + kSceneCount) % kSceneCount];
-}
-
-void setScene(int idx) {
-  s_scene = ((idx % kSceneCount) + kSceneCount) % kSceneCount;
-}
+void setScene(int idx) { s_scene = normalizeSceneIndex(idx); }
 
 void reset() {
   for (auto& f : s_fly) f.active = false;
@@ -674,6 +670,51 @@ void drawMandala(M5Canvas& g, const Frame& fr) {
   drawSparkPixels(g, 230, 210, 255);
 }
 
+namespace {
+
+using SceneDrawFn = void (*)(M5Canvas&, const Frame&);
+
+struct ScenePlugin {
+  SceneInfo info;
+  float sparkGravity;
+  SceneDrawFn draw;
+};
+
+// One compile-time registry owns every index-dependent scene property. The
+// order is persisted by settings as the NVS value "scena".
+constexpr ScenePlugin kScenePlugins[] = {
+    {{SceneId::Meadow, i18n::TextId::SceneMeadow}, 90.0f, drawLaka},
+    {{SceneId::Cosmos, i18n::TextId::SceneCosmos}, 12.0f, drawKosmos},
+    {{SceneId::Ocean, i18n::TextId::SceneOcean}, -70.0f, drawOcean},
+    {{SceneId::Fireworks, i18n::TextId::SceneFireworks}, 130.0f, drawOgnie},
+    {{SceneId::Mandala, i18n::TextId::SceneMandala}, 25.0f, drawMandala},
+};
+
+constexpr int kScenePluginCount =
+    sizeof(kScenePlugins) / sizeof(kScenePlugins[0]);
+static_assert(kScenePluginCount == kSceneCount,
+              "scene registry must match SceneId::Count");
+static_assert(static_cast<uint8_t>(SceneId::Meadow) == 0 &&
+                  static_cast<uint8_t>(SceneId::Cosmos) == 1 &&
+                  static_cast<uint8_t>(SceneId::Ocean) == 2 &&
+                  static_cast<uint8_t>(SceneId::Fireworks) == 3 &&
+                  static_cast<uint8_t>(SceneId::Mandala) == 4,
+              "scene IDs are persisted; never reorder them");
+static_assert(kScenePlugins[0].info.id == SceneId::Meadow &&
+                  kScenePlugins[1].info.id == SceneId::Cosmos &&
+                  kScenePlugins[2].info.id == SceneId::Ocean &&
+                  kScenePlugins[3].info.id == SceneId::Fireworks &&
+                  kScenePlugins[4].info.id == SceneId::Mandala,
+              "scene registry order is the persisted NVS ABI");
+
+}  // namespace
+
+const SceneInfo& sceneInfo(int idx) {
+  return kScenePlugins[normalizeSceneIndex(idx)].info;
+}
+
+const char* sceneName(int idx) { return i18n::tr(sceneInfo(idx).name); }
+
 void draw(M5Canvas& g) {
   const uint32_t now = millis();
   float dt = (float)(now - s_lastMs) * 0.001f;
@@ -683,19 +724,11 @@ void draw(M5Canvas& g) {
                  1.0f - ambient::breathe01()};
   const float t = fr.t;
 
-  // bąbelki w oceanie płyną w górę, żar ogni spada ciężko, w kosmosie dryf
-  static constexpr float kSparkGrav[kSceneCount] = {90.0f, 12.0f, -70.0f,
-                                                    130.0f, 25.0f};
-  updateWorld(fr, kSparkGrav[s_scene]);
+  const ScenePlugin& scene = kScenePlugins[s_scene];
+  updateWorld(fr, scene.sparkGravity);
 
   g.fillSprite(TFT_BLACK);
-  switch (s_scene) {
-    case 0: drawLaka(g, fr); break;
-    case 1: drawKosmos(g, fr); break;
-    case 2: drawOcean(g, fr); break;
-    case 3: drawOgnie(g, fr); break;
-    default: drawMandala(g, fr); break;
-  }
+  scene.draw(g, fr);
 
   // toast: jedyny tekst na scenie, znika sam
   if (s_toastT > 0.0f) {

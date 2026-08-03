@@ -16,6 +16,7 @@
 //    no pair of keys can clash
 //
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 namespace ga {
@@ -24,13 +25,19 @@ constexpr int kGridCols = 14;
 constexpr int kGridRows = 4;
 
 enum class ScaleId : uint8_t {
-  EDO12, EDO19, EDO31, JI11, PENTA, MAJOR,
+  // These values are persisted by the host. Never renumber an existing ID.
+  EDO12 = 0,
+  EDO19 = 1,
+  EDO31 = 2,
+  JI11 = 3,
+  PENTA = 4,
+  MAJOR = 5,
   // WOLF — the anti-scale, hiding at the strange end of the settings list:
   // 62 c column steps, 637 c rows; the only "fifth" in the grid is the
   // historically correct, howling 682 c wolf. Nothing is pure. Born from
   // a forum dare: "can you make one that is always dissonant though?"
-  WOLF,
-  Count
+  WOLF = 6,
+  Count = 7
 };
 
 struct ScaleInfo {
@@ -38,6 +45,30 @@ struct ScaleInfo {
   const char* desc;   // row-geometry description
 };
 
+// A scale "plugin" is deliberately static: plain metadata and callbacks,
+// with no allocation, constructors or platform dependencies. Callback inputs
+// are already normalized by gridToCents()/scaleStepCents(); normal callers
+// should use those compatibility helpers rather than invoking them directly.
+using ScaleStepFn = float (*)(int step);
+using ScaleGridFn = float (*)(int col, int row);
+
+struct ScalePlugin {
+  ScaleId id;                  // stable persisted identity
+  ScaleInfo info;              // stable, non-localized host/fallback text
+  uint8_t stepsPerOctave;
+  ScaleStepFn stepFn;
+  ScaleGridFn gridFn;
+};
+
+// Presentation/discovery order. This order is also the legacy firmware NVS
+// mapping for the "skala" index, so append or migrate stored data before ever
+// reordering existing entries.
+size_t scalePluginCount();
+const ScalePlugin& scalePluginAt(size_t index);
+const ScalePlugin& scalePlugin(ScaleId id);
+size_t scalePluginIndex(ScaleId id);
+
+// Compatibility API kept for existing host and firmware callers.
 const ScaleInfo& scaleInfo(ScaleId s);
 
 // col: 0..13, row: 0..3 (0 = bottom row). Result in cents relative to BaseHz.

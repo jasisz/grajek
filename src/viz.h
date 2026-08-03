@@ -19,6 +19,9 @@
 // markDirty(); main caps it at ~25 fps anyway.
 #pragma once
 #include <M5GFX.h>
+#include <stdint.h>
+
+#include "i18n.h"
 
 namespace viz {
 
@@ -28,7 +31,25 @@ namespace viz {
 //   ocean   — ryby PŁYNĄ przez ekran, perły toną na dno (przepływ)
 //   ognie   — nuty ROZSZERZAJĄ się jako wybuchy z żarem (ekspansja)
 //   mandala — symetryczny wzór z brzmiących nut, obraca się (abstrakcja)
-constexpr int kSceneCount = 5;
+// Values are the persisted NVS/UI ABI. Append new scenes; never reorder or
+// reuse an existing value.
+enum class SceneId : uint8_t {
+  Meadow = 0,
+  Cosmos = 1,
+  Ocean = 2,
+  Fireworks = 3,
+  Mandala = 4,
+  Count = 5,
+};
+
+constexpr int kSceneCount = static_cast<int>(SceneId::Count);
+
+struct SceneInfo {
+  SceneId id;
+  i18n::TextId name;
+};
+
+const SceneInfo& sceneInfo(int idx);
 const char* sceneName(int idx);
 void setScene(int idx);
 
