@@ -6,13 +6,13 @@
     <meta name="color-scheme" content="dark">
     <meta
       name="description"
-      content="Meet Grajek — a little instrument that remembers you — and install it on an M5Stack Cardputer-ADV."
+      content="Grajek — a little instrument for M5Stack Cardputer-ADV."
     >
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https://i.ytimg.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     >
-    <title>grajek — a little instrument that remembers you</title>
+    <title>grajek</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <script
       type="module"
@@ -20,26 +20,22 @@
     ></script>
     <style>
       :root {
-        --night: #050806;
-        --night-soft: #09110c;
-        --panel: #101913;
-        --panel-light: #18231b;
-        --meadow: #17351e;
-        --grass: #3c8246;
-        --leaf: #9bd279;
-        --firefly: #ffeb78;
-        --moon: #ffe5a3;
-        --cream: #f5ecd8;
-        --paper: #ded5c4;
-        --ink: #161916;
-        --muted: #aaa895;
-        --line: #304033;
-        --red: #f17b6e;
-        --blue: #8baaff;
-        --aqua: #84d4bd;
-        --esp-tools-button-color: #ffeb78;
-        --esp-tools-button-text-color: #171a13;
-        --esp-tools-button-border-radius: 7px;
+        --night: #030704;
+        --deep-green: #07140b;
+        --meadow: #0d2814;
+        --grass-dark: #16381d;
+        --grass: #2f6f39;
+        --leaf: #83ba68;
+        --firefly: #ffe66d;
+        --moon: #f3dfaa;
+        --cream: #efe8d4;
+        --muted: #899388;
+        --red: #ee7569;
+        --blue: #829ef0;
+        --aqua: #73cbb0;
+        --esp-tools-button-color: #ffe66d;
+        --esp-tools-button-text-color: #10150f;
+        --esp-tools-button-border-radius: 4px;
       }
 
       * {
@@ -47,1170 +43,441 @@
       }
 
       html {
+        min-width: 300px;
         scroll-behavior: smooth;
+        background: var(--night);
       }
 
       body {
         min-width: 300px;
         margin: 0;
         overflow-x: hidden;
-        background:
-          radial-gradient(circle at 72% 18%, rgb(34 63 40 / 45%), transparent 24rem),
-          radial-gradient(circle at 12% 52%, rgb(62 49 25 / 30%), transparent 28rem),
-          linear-gradient(180deg, #050806 0%, #071009 54%, #0b160e 100%);
+        background: var(--night);
         color: var(--cream);
-        font: 16px/1.6 ui-monospace, "SFMono-Regular", "Cascadia Mono", Consolas, monospace;
-      }
-
-      body::before {
-        position: fixed;
-        z-index: -2;
-        inset: 0;
-        background-image:
-          radial-gradient(circle at 8% 13%, rgb(240 236 195 / 55%) 0 1px, transparent 1.5px),
-          radial-gradient(circle at 30% 8%, rgb(185 205 230 / 38%) 0 1px, transparent 1.5px),
-          radial-gradient(circle at 59% 14%, rgb(240 236 195 / 42%) 0 1px, transparent 1.5px),
-          radial-gradient(circle at 88% 8%, rgb(185 205 230 / 45%) 0 1px, transparent 1.5px),
-          radial-gradient(circle at 93% 35%, rgb(240 236 195 / 38%) 0 1px, transparent 1.5px);
-        background-size: 257px 223px, 311px 283px, 389px 347px, 433px 401px, 503px 461px;
-        content: "";
-        opacity: 0.72;
-        pointer-events: none;
-      }
-
-      body::after {
-        position: fixed;
-        z-index: -1;
-        right: 0;
-        bottom: 0;
-        left: 0;
-        height: 28vh;
-        background: linear-gradient(180deg, transparent, rgb(20 49 27 / 62%));
-        content: "";
-        pointer-events: none;
+        font: 15px/1.6 ui-monospace, "SFMono-Regular", "Cascadia Mono", Consolas, monospace;
       }
 
       ::selection {
         background: var(--firefly);
-        color: var(--ink);
+        color: #10150f;
       }
 
       a {
         color: inherit;
-        text-decoration-color: rgb(255 235 120 / 50%);
-        text-decoration-thickness: 1px;
+        text-decoration-color: rgb(255 230 109 / 48%);
         text-underline-offset: 5px;
       }
 
       a:hover {
-        text-decoration-color: var(--firefly);
+        color: var(--firefly);
       }
 
       a:focus-visible,
-      button:focus-visible {
+      button:focus-visible,
+      summary:focus-visible {
         outline: 3px solid var(--firefly);
         outline-offset: 5px;
       }
 
-      .ambient {
-        position: fixed;
-        z-index: 4;
-        inset: 0;
+      .world {
+        position: relative;
+        isolation: isolate;
+        display: grid;
+        min-height: 100svh;
         overflow: hidden;
+        place-items: center;
+        background:
+          radial-gradient(circle at 50% 68%, rgb(26 72 36 / 20%), transparent 34rem),
+          linear-gradient(180deg, var(--night) 0 52%, var(--deep-green) 100%);
+      }
+
+      .stars {
+        position: absolute;
+        z-index: -6;
+        inset: 0;
+        background-image:
+          radial-gradient(circle at 7% 18%, rgb(239 232 199 / 55%) 0 1px, transparent 1.5px),
+          radial-gradient(circle at 31% 9%, rgb(169 194 217 / 40%) 0 1px, transparent 1.5px),
+          radial-gradient(circle at 63% 20%, rgb(239 232 199 / 40%) 0 1px, transparent 1.5px),
+          radial-gradient(circle at 91% 11%, rgb(169 194 217 / 42%) 0 1px, transparent 1.5px);
+        background-size: 271px 233px, 337px 293px, 397px 359px, 487px 419px;
+        opacity: 0.72;
+      }
+
+      .moon {
+        position: absolute;
+        z-index: -4;
+        top: clamp(38px, 8vw, 88px);
+        right: clamp(28px, 8vw, 130px);
+        width: clamp(42px, 6vw, 72px);
+        aspect-ratio: 1;
+        border-radius: 50%;
+        background: var(--moon);
+        box-shadow:
+          0 0 22px rgb(243 223 170 / 34%),
+          0 0 70px rgb(243 223 170 / 14%);
+        opacity: 0.88;
+      }
+
+      .moon::after {
+        position: absolute;
+        top: -8%;
+        left: -18%;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: var(--night);
+        content: "";
+      }
+
+      .hill,
+      .ground {
+        position: absolute;
+        z-index: -5;
+        right: 0;
+        bottom: 0;
+        left: 0;
         pointer-events: none;
       }
 
-      .ambient i {
+      .hill {
+        bottom: -11vw;
+        left: -12vw;
+        width: 124vw;
+        height: max(240px, 27vw);
+        border-radius: 50% 50% 0 0;
+        background: var(--meadow);
+      }
+
+      .ground {
+        z-index: -2;
+        height: clamp(125px, 19vh, 220px);
+        background: linear-gradient(180deg, transparent, rgb(6 25 11 / 80%) 60%, #07120a);
+      }
+
+      .ground::before,
+      .ground::after {
         position: absolute;
+        right: -3%;
+        bottom: -8px;
+        left: -3%;
+        height: 135px;
+        transform-origin: 50% 100%;
+        background:
+          repeating-linear-gradient(82deg, transparent 0 15px, #234f2a 16px 18px, transparent 19px 31px),
+          repeating-linear-gradient(97deg, transparent 0 24px, #1c4324 25px 27px, transparent 28px 42px);
+        content: "";
+        mask-image: linear-gradient(180deg, transparent 0, black 30%, black 100%);
+        animation: grass-sway 8s ease-in-out infinite alternate;
+      }
+
+      .ground::after {
+        bottom: -22px;
+        height: 180px;
+        transform: scaleX(1.08);
+        background:
+          repeating-linear-gradient(85deg, transparent 0 21px, #2b6335 22px 25px, transparent 26px 40px),
+          repeating-linear-gradient(101deg, transparent 0 29px, #163b20 30px 33px, transparent 34px 53px);
+        opacity: 0.72;
+        animation-duration: 11s;
+        animation-direction: alternate-reverse;
+      }
+
+      @keyframes grass-sway {
+        from { transform: skewX(-0.7deg); }
+        to { transform: skewX(0.9deg); }
+      }
+
+      .firefly {
+        position: absolute;
+        z-index: -1;
         width: 5px;
         height: 5px;
         border-radius: 50%;
         background: var(--firefly);
-        box-shadow: 0 0 8px 3px rgb(255 235 120 / 32%);
-        opacity: 0.46;
-        animation: drift 9s ease-in-out infinite alternate;
+        box-shadow: 0 0 10px 4px rgb(255 230 109 / 30%);
+        opacity: 0.62;
+        animation: drift 10s ease-in-out infinite alternate;
       }
 
-      .ambient i:nth-child(1) { top: 18%; left: 7%; animation-delay: -2s; }
-      .ambient i:nth-child(2) { top: 37%; right: 8%; background: var(--aqua); animation-delay: -6s; }
-      .ambient i:nth-child(3) { top: 69%; left: 4%; background: var(--red); animation-delay: -4s; }
-      .ambient i:nth-child(4) { top: 83%; right: 12%; background: var(--blue); animation-delay: -8s; }
+      .f1 { top: 22%; left: 10%; animation-delay: -2s; }
+      .f2 { top: 31%; right: 13%; background: var(--aqua); animation-delay: -7s; }
+      .f3 { top: 56%; left: 5%; background: var(--red); animation-delay: -4s; }
+      .f4 { top: 68%; right: 6%; background: var(--blue); animation-delay: -9s; }
+      .f5 { bottom: 15%; left: 22%; animation-delay: -6s; }
+      .f6 { bottom: 11%; right: 25%; background: var(--aqua); animation-delay: -1s; }
 
       @keyframes drift {
-        from { transform: translate3d(-3px, 4px, 0); opacity: 0.24; }
-        to { transform: translate3d(8px, -9px, 0); opacity: 0.72; }
+        from { transform: translate3d(-5px, 8px, 0); opacity: 0.28; }
+        to { transform: translate3d(10px, -12px, 0); opacity: 0.8; }
       }
 
-      .shell {
-        width: min(1180px, calc(100% - 36px));
-        margin: 0 auto;
-      }
-
-      .site-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        min-height: 82px;
-        border-bottom: 1px solid rgb(153 196 116 / 18%);
-      }
-
-      .wordmark {
-        text-decoration: none;
-        font-family: "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
-        font-size: 1.45rem;
-        font-weight: 900;
-        letter-spacing: -0.06em;
-      }
-
-      .wordmark span {
-        color: var(--firefly);
-        text-shadow: 0 0 12px rgb(255 235 120 / 72%);
-      }
-
-      nav {
-        display: flex;
-        gap: 24px;
-        color: var(--muted);
-        font-size: 0.72rem;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-      }
-
-      nav a {
-        text-decoration: none;
-      }
-
-      nav a:hover {
-        color: var(--firefly);
-      }
-
-      .hero {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(380px, 0.92fr);
-        gap: clamp(44px, 8vw, 110px);
-        align-items: center;
-        min-height: min(820px, calc(100vh - 82px));
-        padding: 76px 0 94px;
-      }
-
-      .hero > *,
-      .film > *,
-      .install-intro > *,
-      .field-notes > * {
-        min-width: 0;
-      }
-
-      .eyebrow {
-        margin: 0 0 18px;
-        color: var(--leaf);
-        font-size: 0.72rem;
-        font-weight: 800;
-        letter-spacing: 0.19em;
-        text-transform: uppercase;
-      }
-
-      h1,
-      h2,
-      h3,
-      p {
-        margin-top: 0;
+      .clearing {
+        position: relative;
+        z-index: 2;
+        width: min(720px, calc(100% - 28px));
+        padding: clamp(64px, 8vh, 90px) 0 clamp(145px, 18vh, 190px);
+        text-align: center;
       }
 
       h1 {
-        margin-bottom: 26px;
+        margin: 0 0 clamp(34px, 6vh, 62px);
         font-family: "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
-        font-size: clamp(5.2rem, 12vw, 10rem);
+        font-size: clamp(5.2rem, 14vw, 9.6rem);
         font-weight: 900;
         letter-spacing: -0.09em;
-        line-height: 0.78;
-      }
-
-      h1 span {
-        color: var(--firefly);
-        text-shadow: 0 0 28px rgb(255 235 120 / 32%);
-      }
-
-      .hero-lead {
-        max-width: 610px;
-        margin-bottom: 22px;
-        color: #d7d2bf;
-        font-family: Georgia, "Times New Roman", serif;
-        font-size: clamp(1.35rem, 2.6vw, 2rem);
-        line-height: 1.3;
-      }
-
-      .hero-small {
-        max-width: 590px;
-        margin-bottom: 30px;
-        color: var(--muted);
-      }
-
-      .ratio-line {
-        display: inline-flex;
-        gap: 11px;
-        align-items: center;
-        padding: 9px 12px;
-        border-top: 1px solid var(--line);
-        border-bottom: 1px solid var(--line);
-        color: #bbbda4;
-        font-size: 0.67rem;
-        letter-spacing: 0.08em;
-      }
-
-      .ratio-line b {
-        color: var(--firefly);
-        font-weight: 500;
-      }
-
-      .device-wrap {
-        position: relative;
-        transform: rotate(1.4deg);
-      }
-
-      .device-wrap::before {
-        position: absolute;
-        z-index: -1;
-        inset: 12% -8% -8% 8%;
-        border-radius: 50%;
-        background: rgb(0 0 0 / 58%);
-        filter: blur(32px);
-        content: "";
-      }
-
-      .device {
-        position: relative;
-        padding: 17px 17px 20px;
-        border: 2px solid #f3ecdf;
-        border-right-color: #aaa395;
-        border-bottom-color: #908a80;
-        border-radius: 21px 21px 25px 25px;
-        background: linear-gradient(145deg, #e8e1d4, #c9c2b5);
-        box-shadow:
-          inset 0 2px 0 rgb(255 255 255 / 70%),
-          0 28px 70px rgb(0 0 0 / 45%);
-        color: #151714;
-      }
-
-      .device-top {
-        display: grid;
-        grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.6fr) minmax(0, 0.72fr);
-        gap: 12px;
-        align-items: center;
-        margin-bottom: 15px;
-      }
-
-      .device-label {
-        min-width: 0;
-        align-self: stretch;
-        padding: 9px 8px;
-        border: 1px solid #a7a194;
-        border-radius: 8px;
-        background: #ddd7cb;
-        font-family: Arial, sans-serif;
-        font-size: clamp(0.52rem, 1vw, 0.7rem);
-        letter-spacing: 0.06em;
-        line-height: 1.05;
-        text-transform: uppercase;
-        overflow-wrap: anywhere;
-      }
-
-      .device-label strong {
-        display: block;
-        margin-top: 3px;
-        font-size: clamp(1rem, 2.1vw, 1.45rem);
-        letter-spacing: -0.06em;
-      }
-
-      .device-label em {
-        display: block;
-        margin-top: 12px;
-        color: #537056;
-        font-style: normal;
-        font-weight: 700;
-        letter-spacing: 0;
-        text-transform: lowercase;
-      }
-
-      .screen {
-        position: relative;
-        overflow: hidden;
-        aspect-ratio: 240 / 135;
-        border: 7px solid #262a27;
-        border-radius: 7px;
-        background:
-          radial-gradient(circle at 74% 19%, rgb(255 229 163 / 25%) 0 11px, transparent 12px),
-          linear-gradient(180deg, #020504 0 67%, #0c2512 68% 100%);
-        box-shadow:
-          inset 0 0 24px rgb(0 0 0 / 90%),
-          0 1px 0 rgb(255 255 255 / 45%);
-      }
-
-      .screen::before {
-        position: absolute;
-        right: 17%;
-        top: 13%;
-        width: 15px;
-        height: 15px;
-        border-radius: 50%;
-        background: var(--moon);
-        box-shadow: 0 0 10px rgb(255 229 163 / 55%);
-        content: "";
-      }
-
-      .screen::after {
-        position: absolute;
-        right: -10px;
-        bottom: 12%;
-        left: -10px;
-        height: 21%;
-        background:
-          repeating-linear-gradient(78deg, transparent 0 8px, #2d753b 9px 10px, transparent 11px 15px),
-          linear-gradient(180deg, #173d20, #0a1d0e);
-        border-top: 1px solid #3c8246;
-        content: "";
-      }
-
-      .screen-caption {
-        position: absolute;
-        z-index: 2;
-        left: 7px;
-        top: 6px;
-        color: rgb(223 231 210 / 72%);
-        font-size: clamp(0.38rem, 0.8vw, 0.55rem);
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .screen-note {
-        position: absolute;
-        z-index: 3;
-        width: 5px;
-        height: 5px;
-        border-radius: 50%;
-        background: var(--firefly);
-        box-shadow: 0 0 8px 3px rgb(255 235 120 / 45%);
-        animation: note-float 4.5s ease-in-out infinite alternate;
-      }
-
-      .screen-note.n1 { left: 24%; top: 48%; }
-      .screen-note.n2 { left: 43%; top: 31%; background: var(--red); animation-delay: -1.8s; }
-      .screen-note.n3 { left: 58%; top: 53%; background: var(--aqua); animation-delay: -3s; }
-      .screen-note.n4 { left: 72%; top: 38%; background: var(--blue); animation-delay: -0.7s; }
-
-      @keyframes note-float {
-        from { transform: translateY(3px) scale(0.86); opacity: 0.62; }
-        to { transform: translateY(-4px) scale(1.14); opacity: 1; }
-      }
-
-      .seed-row {
-        position: absolute;
-        z-index: 4;
-        right: 12px;
-        bottom: 8px;
-        left: 12px;
-        display: flex;
-        gap: 9%;
-        align-items: end;
-      }
-
-      .seed-row i {
-        width: 3px;
-        height: 3px;
-        border-radius: 50%;
-        background: var(--firefly);
-        box-shadow: 0 0 5px rgb(255 235 120 / 70%);
-      }
-
-      .module-label {
-        min-width: 0;
-        align-self: stretch;
-        padding: 8px 6px;
-        border: 1px dashed #a49d91;
-        border-radius: 8px;
-        background:
-          linear-gradient(135deg, transparent 47%, rgb(241 123 110 / 35%) 48% 52%, transparent 53%),
-          #d5cec1;
-        font-size: clamp(0.42rem, 0.78vw, 0.6rem);
-        line-height: 1.3;
-        text-align: center;
-        text-transform: uppercase;
-        overflow-wrap: anywhere;
-      }
-
-      .module-label strong {
-        display: block;
-        margin: 4px 0;
-        color: #cc5145;
-        font-size: clamp(0.8rem, 1.7vw, 1.15rem);
-      }
-
-      .keys {
-        position: relative;
-        height: clamp(104px, 15vw, 132px);
-        overflow: hidden;
-        border: 1px solid #aaa397;
-        border-radius: 8px 8px 15px 15px;
-        background-color: #ded7ca;
-        background-image:
-          radial-gradient(ellipse 8px 5px at center, #101211 0 68%, #383a36 72% 80%, transparent 84%);
-        background-position: 0 0;
-        background-size: 7.14% 25%;
-        box-shadow: inset 0 2px 7px rgb(70 65 57 / 26%);
-      }
-
-      .keys::before {
-        position: absolute;
-        inset: 23% 0 auto;
-        height: 1px;
-        background: rgb(116 107 94 / 25%);
-        box-shadow:
-          0 calc(clamp(104px, 15vw, 132px) * 0.25) rgb(116 107 94 / 25%),
-          0 calc(clamp(104px, 15vw, 132px) * 0.5) rgb(116 107 94 / 25%);
-        content: "";
-      }
-
-      .go-button,
-      .screw {
-        position: absolute;
-        border-radius: 50%;
-      }
-
-      .go-button {
-        top: 16px;
-        left: 22%;
-        width: 15px;
-        height: 15px;
-        border: 3px solid #a49e93;
-        background: #727168;
-        box-shadow: inset 0 0 0 2px #d9d2c5;
-      }
-
-      .screw {
-        top: 14px;
-        right: 23%;
-        width: 10px;
-        height: 10px;
-        background: linear-gradient(135deg, #85837d 45%, #373835 47% 53%, #bbb7ad 55%);
-        box-shadow: 0 0 0 2px #aaa59c;
-      }
-
-      .device-sticker {
-        position: absolute;
-        right: -15px;
-        bottom: -19px;
-        padding: 8px 11px;
-        transform: rotate(-5deg);
-        border: 1px solid #5a4932;
-        background: var(--firefly);
-        box-shadow: 3px 5px 0 rgb(0 0 0 / 26%);
-        color: var(--ink);
-        font-size: 0.65rem;
-        font-weight: 900;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-      }
-
-      .origin-note {
-        max-width: 410px;
-        margin: 34px auto 0;
-        color: var(--muted);
-        font-size: 0.77rem;
-        text-align: center;
-      }
-
-      .origin-note strong {
-        color: var(--cream);
-      }
-
-      .memory-sequence {
-        border-top: 1px solid var(--line);
-        border-bottom: 1px solid var(--line);
-        background: rgb(5 8 6 / 46%);
-      }
-
-      .memory-sequence ol {
-        display: grid;
-        grid-template-columns: repeat(5, 1fr);
-        gap: 0;
-        margin: 0;
-        padding: 0;
-        list-style: none;
-      }
-
-      .memory-sequence li {
-        position: relative;
-        padding: 24px 22px;
-        color: #bbb9a6;
-        font-size: 0.75rem;
-        text-align: center;
-      }
-
-      .memory-sequence li:not(:last-child)::after {
-        position: absolute;
-        top: 50%;
-        right: -5px;
-        color: var(--grass);
-        content: "→";
-        transform: translateY(-50%);
-      }
-
-      .memory-sequence b {
-        display: block;
-        margin-bottom: 4px;
-        color: var(--firefly);
-        font-size: 0.63rem;
-        font-weight: 500;
-        letter-spacing: 0.12em;
+        line-height: 0.75;
       }
 
       .film {
-        display: grid;
-        grid-template-columns: minmax(0, 1.18fr) minmax(280px, 0.82fr);
-        gap: clamp(34px, 7vw, 88px);
-        align-items: center;
-        padding: 132px 0;
-      }
-
-      .film-window {
         position: relative;
         display: block;
+        width: 100%;
         overflow: hidden;
-        transform: rotate(-1.15deg);
-        border: 9px solid #e9e0cf;
+        transform: rotate(-0.45deg);
+        border: 1px solid #31523a;
         border-radius: 3px;
-        background: #d4ccbe;
+        background: #071009;
         box-shadow:
-          11px 14px 0 rgb(23 53 30 / 70%),
-          0 32px 70px rgb(0 0 0 / 45%);
+          0 0 0 5px rgb(4 12 6 / 75%),
+          0 24px 70px rgb(0 0 0 / 50%);
         text-decoration: none;
       }
 
-      .film-window::before {
+      .film::after {
         position: absolute;
-        z-index: 2;
         inset: 0;
         background:
-          linear-gradient(180deg, transparent 54%, rgb(3 6 4 / 68%)),
-          repeating-linear-gradient(0deg, rgb(255 255 255 / 2%) 0 1px, transparent 1px 4px);
+          linear-gradient(180deg, transparent 55%, rgb(2 5 3 / 62%)),
+          repeating-linear-gradient(0deg, rgb(255 255 255 / 1.5%) 0 1px, transparent 1px 4px);
         content: "";
         pointer-events: none;
       }
 
-      .film-window img {
+      .film img {
         display: block;
         width: 100%;
+        height: auto;
         aspect-ratio: 16 / 9;
         object-fit: cover;
-        filter: saturate(0.88) contrast(1.03);
-        transition: transform 500ms ease, filter 500ms ease;
+        filter: saturate(0.84) brightness(0.9);
+        transition: filter 450ms ease, transform 450ms ease;
       }
 
-      .film-window:hover img {
-        transform: scale(1.018);
-        filter: saturate(1) contrast(1.05);
+      .film:hover img {
+        transform: scale(1.012);
+        filter: saturate(1) brightness(0.98);
       }
 
       .play {
         position: absolute;
-        z-index: 3;
+        z-index: 2;
         top: 50%;
         left: 50%;
         display: grid;
-        width: 78px;
-        height: 78px;
+        width: 64px;
+        height: 64px;
         transform: translate(-50%, -50%);
-        border: 2px solid rgb(255 255 255 / 68%);
+        border: 1px solid rgb(255 255 255 / 52%);
         border-radius: 50%;
-        background: rgb(5 8 6 / 72%);
-        box-shadow: 0 0 0 8px rgb(5 8 6 / 22%);
+        background: rgb(3 7 4 / 72%);
+        box-shadow: 0 0 25px rgb(255 230 109 / 24%);
         color: var(--firefly);
-        font-size: 1.65rem;
+        font-size: 1.25rem;
         place-items: center;
-        transition: transform 220ms ease, background 220ms ease;
       }
 
-      .film-window:hover .play {
-        transform: translate(-50%, -50%) scale(1.08);
-        background: rgb(19 53 27 / 90%);
-      }
-
-      .film-time,
-      .film-title {
-        position: absolute;
-        z-index: 3;
-        bottom: 16px;
-      }
-
-      .film-time {
-        right: 17px;
-        padding: 4px 7px;
-        background: rgb(5 8 6 / 82%);
-        font-size: 0.65rem;
-      }
-
-      .film-title {
-        left: 17px;
-        max-width: 64%;
-        margin: 0;
-        color: white;
-        font-size: 0.7rem;
-        font-weight: 700;
-        line-height: 1.35;
-      }
-
-      .film-copy h2 {
-        margin-bottom: 24px;
-        font-family: "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
-        font-size: clamp(2.6rem, 5vw, 5rem);
-        letter-spacing: -0.065em;
-        line-height: 0.96;
-      }
-
-      .film-copy > p:not(.eyebrow) {
-        color: var(--muted);
-      }
-
-      .watch-link {
-        display: inline-flex;
-        gap: 11px;
-        align-items: center;
-        margin-top: 11px;
-        color: var(--firefly);
-        font-size: 0.78rem;
-        font-weight: 800;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-      }
-
-      .manifesto {
-        position: relative;
-        padding: 96px clamp(28px, 7vw, 92px);
-        overflow: hidden;
-        border: 1px solid #3a513e;
-        border-radius: 30px;
-        background:
-          radial-gradient(circle at 88% 50%, rgb(255 235 120 / 9%), transparent 17rem),
-          linear-gradient(135deg, #101a13, #0a100c);
-      }
-
-      .manifesto::after {
-        position: absolute;
-        right: 7%;
-        bottom: -39px;
-        width: 180px;
-        height: 180px;
-        border: 1px solid rgb(255 235 120 / 14%);
-        border-radius: 50%;
-        box-shadow:
-          0 0 0 28px rgb(255 235 120 / 4%),
-          0 0 0 56px rgb(255 235 120 / 3%);
-        content: "";
-      }
-
-      .manifesto p {
-        position: relative;
-        z-index: 1;
-        max-width: 880px;
-        margin-bottom: 0;
-        font-family: Georgia, "Times New Roman", serif;
-        font-size: clamp(2rem, 4.6vw, 4.6rem);
-        line-height: 1.09;
-      }
-
-      .manifesto strong {
-        color: var(--firefly);
-        font-weight: 400;
-      }
-
-      .install-section {
-        padding: 144px 0 80px;
-      }
-
-      .install-intro {
-        display: grid;
-        grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
-        gap: 60px;
-        align-items: end;
-        margin-bottom: 48px;
-      }
-
-      .install-intro h2 {
-        margin-bottom: 0;
-        font-family: "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
-        font-size: clamp(3.4rem, 7vw, 7rem);
-        letter-spacing: -0.075em;
-        line-height: 0.87;
-      }
-
-      .install-intro-copy {
-        max-width: 580px;
-        margin-bottom: 4px;
-        color: var(--muted);
-      }
-
-      .install-intro-copy strong {
-        color: var(--cream);
-      }
-
-      .install-shell {
-        position: relative;
-        padding: clamp(22px, 4vw, 46px);
-        border: 2px solid #eee6d8;
-        border-right-color: #aaa396;
-        border-bottom-color: #928c82;
-        border-radius: 26px;
-        background:
-          linear-gradient(145deg, rgb(255 255 255 / 34%), transparent 22%),
-          var(--paper);
-        box-shadow:
-          0 28px 80px rgb(0 0 0 / 42%),
-          inset 0 1px 0 rgb(255 255 255 / 78%);
-        color: var(--ink);
-      }
-
-      .service-sticker {
+      .watch {
         position: absolute;
         z-index: 2;
-        top: -22px;
-        right: clamp(18px, 6vw, 70px);
-        max-width: 430px;
-        padding: 11px 15px;
-        transform: rotate(1.5deg);
-        border: 1px solid #795e2a;
-        background: #f6cb68;
-        box-shadow: 4px 5px 0 rgb(0 0 0 / 17%);
-        font-size: 0.69rem;
-        font-weight: 800;
-        line-height: 1.4;
-      }
-
-      .panel-head {
-        display: flex;
-        gap: 22px;
-        align-items: center;
-        justify-content: space-between;
-        margin: 13px 0 22px;
-        padding: 0 4px;
-        color: #5e6058;
-        font-size: 0.67rem;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-      }
-
-      .panel-head b {
-        color: #253b29;
-      }
-
-      .flash-panel {
-        overflow: hidden;
-        border: 2px solid #343c35;
-        border-radius: 14px;
-        background:
-          linear-gradient(90deg, transparent 49.8%, rgb(255 255 255 / 2%) 50%, transparent 50.2%),
-          #111713;
-        box-shadow:
-          inset 0 0 0 1px #050806,
-          inset 0 12px 24px rgb(0 0 0 / 24%);
-        color: var(--cream);
-      }
-
-      .firmware-row {
-        display: grid;
-        grid-template-columns: 72px minmax(0, 1fr) auto;
-        gap: 24px;
-        align-items: center;
-        min-height: 154px;
-        padding: 26px 30px;
-      }
-
-      .firmware-row + .firmware-row {
-        border-top: 1px dashed #4c594e;
-      }
-
-      .firmware-no {
-        color: #647067;
-        font-family: Georgia, serif;
-        font-size: 2.4rem;
-        font-style: italic;
-      }
-
-      .firmware-copy h3 {
-        margin-bottom: 5px;
-        font-family: "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
-        font-size: 1.55rem;
-        letter-spacing: -0.035em;
-      }
-
-      .firmware-copy p {
-        margin-bottom: 0;
-        color: #999f94;
-        font-size: 0.75rem;
-      }
-
-      .default-badge {
-        display: inline-block;
-        margin-left: 8px;
-        padding: 3px 6px;
-        transform: translateY(-2px);
-        border: 1px solid #4b744d;
-        color: var(--leaf);
-        font: 700 0.52rem/1 ui-monospace, monospace;
+        right: 14px;
+        bottom: 12px;
+        color: #ded9c9;
+        font-size: 0.66rem;
         letter-spacing: 0.08em;
-        text-transform: uppercase;
+      }
+
+      .install {
+        margin-top: clamp(38px, 6vh, 58px);
+      }
+
+      .install h2 {
+        margin: 0 0 24px;
+        font-family: "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
+        font-size: clamp(2.6rem, 8vw, 4.5rem);
+        letter-spacing: -0.07em;
+        line-height: 1;
+      }
+
+      .install h2 span {
+        color: var(--leaf);
+      }
+
+      .install-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        justify-content: center;
+      }
+
+      .install-options esp-web-install-button {
+        display: block;
       }
 
       button[slot="activate"] {
-        min-width: 202px;
-        min-height: 54px;
-        padding: 0 20px;
-        border: 1px solid #fff2a6;
-        border-radius: 7px;
+        min-width: 205px;
+        padding: 16px 24px;
+        border: 0;
+        border-radius: 4px;
         background: var(--firefly);
-        box-shadow:
-          0 5px 0 #8f823e,
-          0 8px 20px rgb(0 0 0 / 25%);
-        color: #171a13;
+        box-shadow: 0 4px 0 #806f29;
+        color: #10150f;
         cursor: pointer;
-        font: 900 0.78rem/1 ui-monospace, monospace;
-        letter-spacing: 0.02em;
-        transition: transform 120ms ease, box-shadow 120ms ease;
+        font: 800 0.82rem/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+        letter-spacing: 0.03em;
+      }
+
+      .polish button[slot="activate"] {
+        background: #86bc6d;
+        box-shadow: 0 4px 0 #36582d;
       }
 
       button[slot="activate"]:hover {
         transform: translateY(-1px);
-        box-shadow:
-          0 6px 0 #8f823e,
-          0 9px 24px rgb(0 0 0 / 30%);
+        filter: brightness(1.05);
       }
 
       button[slot="activate"]:active {
-        transform: translateY(4px);
-        box-shadow: 0 1px 0 #8f823e;
-      }
-
-      .firmware-row.polish button[slot="activate"] {
-        border-color: #a8df91;
-        background: var(--leaf);
-        box-shadow:
-          0 5px 0 #4d7542,
-          0 8px 20px rgb(0 0 0 / 25%);
+        transform: translateY(3px);
+        box-shadow: 0 1px 0 #806f29;
       }
 
       .unsupported {
         display: block;
-        max-width: 230px;
-        color: #f6b880;
-        font-size: 0.67rem;
-      }
-
-      .panel-foot {
-        display: flex;
-        gap: 20px;
-        justify-content: space-between;
-        padding: 17px 5px 0;
-        color: #63665e;
-        font-size: 0.64rem;
-      }
-
-      .field-notes {
-        display: grid;
-        grid-template-columns: 1.15fr 0.85fr;
-        gap: 26px;
-        padding: 30px 0 128px;
-      }
-
-      .note-card {
-        padding: clamp(25px, 4vw, 42px);
-        border: 1px solid var(--line);
-        border-radius: 20px;
-        background: rgb(10 16 12 / 72%);
-      }
-
-      .note-card h3 {
-        margin-bottom: 24px;
-        font-family: "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
-        font-size: 1.35rem;
-        letter-spacing: -0.025em;
-      }
-
-      .steps {
-        margin: 0;
-        padding: 0;
-        list-style: none;
-        counter-reset: steps;
-      }
-
-      .steps li {
-        display: grid;
-        grid-template-columns: 40px 1fr;
-        gap: 13px;
-        color: var(--muted);
-        counter-increment: steps;
-      }
-
-      .steps li + li {
-        margin-top: 17px;
-      }
-
-      .steps li::before {
-        color: var(--firefly);
-        content: "0" counter(steps);
+        max-width: 440px;
+        margin: 14px auto 0;
+        color: #d1a59f;
         font-size: 0.72rem;
-        letter-spacing: 0.05em;
       }
 
-      .recovery {
-        margin: 26px 0 0;
-        padding-top: 20px;
-        border-top: 1px dashed var(--line);
-        color: #858a80;
-        font-size: 0.7rem;
+      .warning {
+        margin: 22px 0 0;
+        color: #9ca69a;
+        font-size: 0.68rem;
       }
 
-      .launcher p {
+      details {
+        width: min(520px, 100%);
+        margin: 20px auto 0;
         color: var(--muted);
+        font-size: 0.72rem;
+        text-align: left;
       }
 
-      .launcher-mark {
-        display: inline-block;
-        margin-bottom: 22px;
-        padding: 6px 9px;
-        border: 1px solid #49674d;
+      summary {
+        width: max-content;
+        margin: 0 auto;
+        cursor: pointer;
+        color: #a9b9a6;
+        list-style: none;
+        text-decoration: underline;
+        text-decoration-color: rgb(255 230 109 / 38%);
+        text-underline-offset: 5px;
+      }
+
+      summary::-webkit-details-marker {
+        display: none;
+      }
+
+      summary::before {
         color: var(--leaf);
-        font-size: 0.62rem;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
+        content: "+ ";
       }
 
-      .launcher a {
-        color: var(--firefly);
+      details[open] summary::before {
+        content: "− ";
       }
 
-      footer {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 30px;
-        align-items: end;
-        padding: 54px 0 44px;
-        border-top: 1px solid var(--line);
-        color: #767b72;
-        font-size: 0.7rem;
+      .help {
+        margin-top: 18px;
+        padding-top: 17px;
+        border-top: 1px solid #294331;
       }
 
-      .footer-thought {
-        max-width: 570px;
+      .help ol {
         margin: 0;
-        color: #b6b6a3;
-        font-family: Georgia, serif;
-        font-size: 1.15rem;
+        padding-left: 22px;
       }
 
-      .footer-links {
+      .help li + li {
+        margin-top: 9px;
+      }
+
+      .help p {
+        margin: 15px 0 0;
+        color: #798477;
+      }
+
+      .links {
         display: flex;
-        gap: 19px;
+        flex-wrap: wrap;
+        gap: 18px;
+        justify-content: center;
+        margin-top: 27px;
+        color: #6f7a6d;
+        font-size: 0.66rem;
       }
 
-      @media (max-width: 900px) {
-        .hero {
-          grid-template-columns: 1fr;
-          min-height: auto;
-          padding-top: 88px;
-        }
-
-        .hero-copy {
-          max-width: 760px;
-        }
-
-        .device-wrap {
-          width: min(620px, 92%);
-          margin: 0 auto;
-        }
-
-        .film,
-        .install-intro,
-        .field-notes {
-          grid-template-columns: 1fr;
-        }
-
-        .film-copy {
-          max-width: 700px;
-        }
-
-        .install-intro {
-          gap: 27px;
-        }
+      .links a {
+        text-decoration-thickness: 1px;
       }
 
-      @media (max-width: 680px) {
-        .shell {
-          width: min(100% - 24px, 1180px);
+      @media (max-width: 560px) {
+        .moon {
+          top: 28px;
+          right: 25px;
         }
 
-        .site-header {
-          min-height: 70px;
-        }
-
-        nav {
-          gap: 13px;
-          font-size: 0.61rem;
-        }
-
-        nav a:first-child {
-          display: none;
+        .clearing {
+          width: min(100% - 24px, 720px);
+          padding-top: 76px;
+          padding-bottom: 130px;
         }
 
         h1 {
-          font-size: clamp(4.4rem, 25vw, 7rem);
-        }
-
-        .hero {
-          gap: 64px;
-          padding: 66px 0 78px;
-        }
-
-        .device {
-          padding: 11px 11px 15px;
-        }
-
-        .device-top {
-          grid-template-columns: minmax(0, 0.72fr) minmax(112px, 1.58fr) minmax(0, 0.64fr);
-          gap: 7px;
-          margin-bottom: 10px;
-        }
-
-        .device-label {
-          padding: 6px 5px;
-          font-size: 0.38rem;
-        }
-
-        .device-label strong {
-          font-size: 0.82rem;
-        }
-
-        .device-label em {
-          margin-top: 7px;
-          font-size: 0.42rem;
-        }
-
-        .module-label {
-          padding: 5px 3px;
-          font-size: 0.34rem;
-        }
-
-        .module-label strong {
-          font-size: 0.72rem;
-        }
-
-        .screen {
-          border-width: 4px;
-        }
-
-        .device-sticker {
-          right: 1px;
-          bottom: -17px;
-          font-size: 0.53rem;
-        }
-
-        .go-button,
-        .screw {
-          display: none;
-        }
-
-        .memory-sequence ol {
-          grid-template-columns: 1fr;
-          padding: 12px 0;
-        }
-
-        .memory-sequence li {
-          padding: 10px 20px;
-          text-align: left;
-        }
-
-        .memory-sequence li:not(:last-child)::after {
-          right: auto;
-          left: 6px;
-          content: "↓";
-        }
-
-        .memory-sequence b {
-          display: inline-block;
-          width: 52px;
-          margin: 0;
+          margin-bottom: 42px;
+          font-size: clamp(4.7rem, 25vw, 6.2rem);
         }
 
         .film {
-          padding: 88px 0;
-        }
-
-        .film-window {
-          border-width: 6px;
-        }
-
-        .film-title {
-          display: none;
+          transform: none;
         }
 
         .play {
-          width: 62px;
-          height: 62px;
+          width: 56px;
+          height: 56px;
         }
 
-        .manifesto {
-          padding: 66px 26px;
-          border-radius: 20px;
+        .install {
+          margin-top: 42px;
         }
 
-        .install-section {
-          padding-top: 105px;
-        }
-
-        .service-sticker {
-          position: relative;
-          top: auto;
-          right: auto;
-          display: block;
-          max-width: none;
-          margin: -40px 5px 27px;
-        }
-
-        .panel-head {
-          align-items: flex-start;
-          flex-direction: column;
-          gap: 6px;
-        }
-
-        .firmware-row {
-          grid-template-columns: 43px 1fr;
-          gap: 14px;
-          padding: 25px 20px 31px;
-        }
-
-        .firmware-row esp-web-install-button {
-          grid-column: 1 / -1;
-          margin-left: 57px;
+        .install-options {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
         }
 
         button[slot="activate"] {
-          width: min(100%, 270px);
+          width: 100%;
           min-width: 0;
+          padding: 15px 10px;
+          font-size: 0.75rem;
         }
 
-        .panel-foot,
-        footer {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-
-        .panel-foot {
-          display: flex;
-        }
-
-        footer {
-          display: flex;
-        }
-
-        .footer-links {
-          flex-wrap: wrap;
+        .warning {
+          max-width: 340px;
+          margin-right: auto;
+          margin-left: auto;
         }
       }
 
@@ -1224,241 +491,97 @@
         *::after {
           animation-duration: 0.01ms !important;
           animation-iteration-count: 1 !important;
-          scroll-behavior: auto !important;
           transition-duration: 0.01ms !important;
         }
       }
     </style>
   </head>
   <body>
-    <div class="ambient" aria-hidden="true">
-      <i></i><i></i><i></i><i></i>
-    </div>
+    <main class="world">
+      <div class="stars" aria-hidden="true"></div>
+      <div class="moon" aria-hidden="true"></div>
+      <div class="hill" aria-hidden="true"></div>
+      <div class="ground" aria-hidden="true"></div>
+      <i class="firefly f1" aria-hidden="true"></i>
+      <i class="firefly f2" aria-hidden="true"></i>
+      <i class="firefly f3" aria-hidden="true"></i>
+      <i class="firefly f4" aria-hidden="true"></i>
+      <i class="firefly f5" aria-hidden="true"></i>
+      <i class="firefly f6" aria-hidden="true"></i>
 
-    <header class="site-header shell">
-      <a class="wordmark" href="#top" aria-label="Grajek, back to top">grajek<span>.</span></a>
-      <nav aria-label="Main navigation">
-        <a href="#remember">what it is</a>
-        <a href="#watch">watch</a>
-        <a href="#install">install</a>
-        <a href="https://github.com/jasisz/grajek">source</a>
-      </nav>
-    </header>
+      <div class="clearing">
+        <h1>grajek</h1>
 
-    <main id="top">
-      <section class="hero shell">
-        <div class="hero-copy">
-          <p class="eyebrow">a first instrument for curious hands</p>
-          <h1>grajek<span>.</span></h1>
-          <p class="hero-lead">A little instrument that remembers you.</p>
-          <p class="hero-small">
-            You cannot play it wrong. Press anything and it becomes music.
-            Play for a while and the box keeps a small garden of your phrases.
-            Shake one loose. Lay it face-down and let the garden sing goodnight.
-          </p>
-          <div class="ratio-line" aria-label="Pure tuning ratios">
-            <span>1/1</span><b>·</b><span>9/8</span><b>·</b><span>5/4</span><b>·</b>
-            <span>3/2</span><b>·</b><span>7/4</span><b>·</b><span>2/1</span>
-          </div>
-        </div>
-
-        <div>
-          <div class="device-wrap" aria-label="A stylized Cardputer-ADV showing Grajek's memory garden">
-            <div class="device">
-              <span class="go-button" aria-hidden="true"></span>
-              <span class="screw" aria-hidden="true"></span>
-              <div class="device-top">
-                <div class="device-label">
-                  cardputer
-                  <strong>grajek</strong>
-                  <em>małe pudełko / długa pamięć</em>
-                </div>
-                <div class="screen" aria-hidden="true">
-                  <span class="screen-caption">łąka · memory garden</span>
-                  <i class="screen-note n1"></i>
-                  <i class="screen-note n2"></i>
-                  <i class="screen-note n3"></i>
-                  <i class="screen-note n4"></i>
-                  <span class="seed-row"><i></i><i></i><i></i><i></i><i></i></span>
-                </div>
-                <div class="module-label">
-                  stamp
-                  <strong>S3A</strong>
-                  tilt · shake<br>listen · sleep
-                </div>
-              </div>
-              <div class="keys" aria-hidden="true"></div>
-              <span class="device-sticker">56 keys = 56 good ideas</span>
-            </div>
-          </div>
-          <p class="origin-note">
-            <strong>Built by a dad for small hands.</strong>
-            A serious little synthesis engine hiding in a $60 box.
-          </p>
-        </div>
-      </section>
-
-      <section class="memory-sequence" id="remember" aria-label="How Grajek behaves">
-        <ol class="shell">
-          <li><b>01</b>press anything</li>
-          <li><b>02</b>it becomes music</li>
-          <li><b>03</b>the box remembers</li>
-          <li><b>04</b>shake memory loose</li>
-          <li><b>05</b>face-down · goodnight</li>
-        </ol>
-      </section>
-
-      <section class="film shell" id="watch">
         <a
-          class="film-window"
+          class="film"
           href="https://youtu.be/B_mKRkjaak8"
           target="_blank"
           rel="noopener"
-          aria-label="Watch Grajek — a pocket instrument that cannot be played badly on YouTube"
+          aria-label="Watch Grajek on YouTube, 1 minute 6 seconds"
         >
           <img
             src="https://i.ytimg.com/vi/B_mKRkjaak8/maxresdefault.jpg"
-            alt="A real white Cardputer-ADV running Grajek, held in one hand"
+            alt="A Cardputer-ADV running Grajek, held in one hand"
             width="1280"
             height="720"
-            loading="lazy"
             decoding="async"
             referrerpolicy="no-referrer"
           >
           <span class="play" aria-hidden="true">▶</span>
-          <p class="film-title">Grajek — a pocket instrument that cannot be played badly</p>
-          <span class="film-time">01:06 · sound on</span>
+          <span class="watch">watch · 1:06</span>
         </a>
 
-        <div class="film-copy">
-          <p class="eyebrow">the real box · the real sound</p>
-          <h2>See it wake up.</h2>
-          <p>
-            One minute is enough: keys become harmony, movement becomes timbre,
-            and a tiny screen turns notes into worlds. No product render. No
-            backing track. Just Grajek in a hand.
-          </p>
-          <a
-            class="watch-link"
-            href="https://youtu.be/B_mKRkjaak8"
-            target="_blank"
-            rel="noopener"
-          >▶ watch on YouTube</a>
-        </div>
-      </section>
+        <section class="install" aria-labelledby="install-title">
+          <h2 id="install-title">wgraj<span>.</span></h2>
+          <div class="install-options">
+            <esp-web-install-button manifest="manifest.json">
+              <button slot="activate" type="button">install · EN</button>
+              <span slot="unsupported" class="unsupported">
+                Use desktop Chrome or Edge with Web Serial.
+              </span>
+              <span slot="not-allowed" class="unsupported">
+                Open this page over HTTPS to allow USB access.
+              </span>
+            </esp-web-install-button>
 
-      <section class="manifesto shell">
-        <p>
-          <strong>A cat, not a Furby.</strong>
-          It never asks to be played. Switch it on and it purrs. Play and it
-          remembers. Leave it alone and it dreams quietly.
-        </p>
-      </section>
-
-      <section class="install-section shell" id="install">
-        <div class="install-intro">
-          <div>
-            <p class="eyebrow">M5Stack Cardputer-ADV</p>
-            <h2>Wake your box.</h2>
-          </div>
-          <p class="install-intro-copy">
-            One cable, one click, then every key is music. English is the
-            public default; Polish is the same instrument with Polish words.
-            Current release: <strong><span id="version">…</span></strong>.
-          </p>
-        </div>
-
-        <div class="install-shell">
-          <p class="service-sticker">
-            Cardputer-ADV only. Flashing replaces the current firmware and
-            clears saved settings and the old phrase garden.
-          </p>
-
-          <div class="panel-head">
-            <span><b>grajek firmware bay</b> · choose the words on its screen</span>
-            <span>USB-C DATA · ESP32-S3</span>
+            <esp-web-install-button class="polish" manifest="manifest-pl.json">
+              <button slot="activate" type="button">wgraj · PL</button>
+              <span slot="unsupported" class="unsupported">
+                Użyj Chrome lub Edge na komputerze.
+              </span>
+              <span slot="not-allowed" class="unsupported">
+                Otwórz tę stronę przez HTTPS, aby zezwolić na USB.
+              </span>
+            </esp-web-install-button>
           </div>
 
-          <div class="flash-panel">
-            <article class="firmware-row">
-              <span class="firmware-no">01</span>
-              <div class="firmware-copy">
-                <h3>English <span class="default-badge">default</span></h3>
-                <p>One language in the box. No locale menu, no duplicate state.</p>
-              </div>
-              <esp-web-install-button manifest="manifest.json">
-                <button slot="activate" type="button">Install Grajek · EN</button>
-                <span slot="unsupported" class="unsupported">
-                  Use desktop Chrome or Edge with Web Serial.
-                </span>
-                <span slot="not-allowed" class="unsupported">
-                  Open this page over HTTPS to allow USB access.
-                </span>
-              </esp-web-install-button>
-            </article>
-
-            <article class="firmware-row polish">
-              <span class="firmware-no">02</span>
-              <div class="firmware-copy">
-                <h3>Polski</h3>
-                <p>Ten sam Grajek. Polskie słowa, ta sama pamięć i ten sam ogród.</p>
-              </div>
-              <esp-web-install-button manifest="manifest-pl.json">
-                <button slot="activate" type="button">Wgraj Grajka · PL</button>
-                <span slot="unsupported" class="unsupported">
-                  Użyj Chrome lub Edge na komputerze.
-                </span>
-                <span slot="not-allowed" class="unsupported">
-                  Otwórz tę stronę przez HTTPS, aby zezwolić na USB.
-                </span>
-              </esp-web-install-button>
-            </article>
-          </div>
-
-          <div class="panel-foot">
-            <span>release <span id="panel-version">…</span> · full merged image · offset 0x0</span>
-            <span>no account · no IDE · no Python</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="field-notes shell" aria-label="Installation notes">
-        <article class="note-card">
-          <h3>Three things, then music.</h3>
-          <ol class="steps">
-            <li>Switch on the Cardputer-ADV and connect a data-capable USB-C cable.</li>
-            <li>Close any serial monitor, press Install and choose the USB JTAG/serial device.</li>
-            <li>Wait for verification. The box restarts straight into the instrument.</li>
-          </ol>
-          <p class="recovery">
-            No port? Switch the box off, hold G0 while reconnecting or switching
-            it on, release G0, then try again.
+          <p class="warning">
+            Cardputer-ADV only · flashing replaces firmware and clears saved memories
           </p>
-        </article>
 
-        <article class="note-card launcher">
-          <span class="launcher-mark">already using M5Launcher?</span>
-          <h3>The same image works.</h3>
-          <p>
-            Download the English or Polish merged <code>.bin</code> from the
-            <a href="https://github.com/jasisz/grajek/releases/latest">latest release</a>
-            and install it from an OTA Favorite, the WebUI or an SD card.
-          </p>
-        </article>
-      </section>
-    </main>
+          <details>
+            <summary>help</summary>
+            <div class="help">
+              <ol>
+                <li>Connect the Cardputer-ADV with a data-capable USB-C cable.</li>
+                <li>Close serial monitors, press install and choose USB JTAG/serial.</li>
+                <li>Wait for verification. Grajek restarts by itself.</li>
+              </ol>
+              <p>
+                No port? Switch it off, hold G0 while reconnecting or powering on,
+                release G0, then try again.
+              </p>
+            </div>
+          </details>
 
-    <footer class="shell">
-      <p class="footer-thought">
-        Memory is the soul: Grajek keeps a little of what a child taught it,
-        then gives it back differently.
-      </p>
-      <div class="footer-links">
-        <a href="https://youtu.be/B_mKRkjaak8" target="_blank" rel="noopener">video</a>
-        <a href="https://github.com/jasisz/grajek/releases">releases</a>
-        <a href="https://github.com/jasisz/grajek">source · MIT</a>
+          <div class="links">
+            <span>v<span id="version">…</span></span>
+            <a href="https://github.com/jasisz/grajek/releases/latest">releases</a>
+            <a href="https://github.com/jasisz/grajek">source · MIT</a>
+          </div>
+        </section>
       </div>
-    </footer>
+    </main>
 
     <script>
       fetch("manifest.json")
@@ -1468,11 +591,9 @@
         })
         .then((manifest) => {
           document.querySelector("#version").textContent = manifest.version;
-          document.querySelector("#panel-version").textContent = manifest.version;
         })
         .catch(() => {
-          document.querySelector("#version").textContent = "unknown";
-          document.querySelector("#panel-version").textContent = "unknown";
+          document.querySelector("#version").textContent = "?";
         });
     </script>
   </body>
