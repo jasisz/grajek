@@ -4,5 +4,6 @@ host/build/
 host/out/
 host/grajek_soul.txt
 host/session_*.wav
+/media/*.mp4
 .vscode/
 .DS_Store
