@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -23,13 +24,6 @@ jobs:
 
   firmware:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        environment:
-          - cardputer-adv
-          - cardputer-adv-pl
-          - cardputer-body-probe
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -37,20 +31,21 @@ jobs:
           python-version: "3.12"
       - name: Install PlatformIO
         run: python -m pip install platformio==6.1.19
-      - name: Build ${{ matrix.environment }}
-        run: pio run -e "${{ matrix.environment }}"
-      - name: Keep production image for package smoke test
-        if: matrix.environment != 'cardputer-body-probe'
+      - name: Build English, Polish and probe images
+        run: pio run -e cardputer-adv -e cardputer-adv-pl -e cardputer-body-probe
+      - name: Upload production images
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: build-${{ matrix.environment }}
-          path: .pio/build/${{ matrix.environment }}/firmware.factory.bin
+          name: production-builds
+          path: |
+            .pio/build/cardputer-adv/firmware.factory.bin
+            .pio/build/cardputer-adv-pl/firmware.factory.bin
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
-  package-smoke:
-    needs: firmware
+  package:
+    needs: [host-tests, firmware]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -59,20 +54,73 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: build-cardputer-adv
-          path: build/en
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: build-cardputer-adv-pl
-          path: build/pl
-      - name: Package a synthetic release
+          name: production-builds
+          path: build
+      - name: Package firmware and browser installer
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0-ci' }}
         run: >-
           python tools/package_release.py
-          --version v0.0.0-ci
-          --en-build build/en
-          --pl-build build/pl
+          --version "$VERSION"
+          --en-build build/cardputer-adv
+          --pl-build build/cardputer-adv-pl
           --web-source web
           --output dist
       - name: Verify packaged checksums
         working-directory: dist/release
         run: sha256sum -c SHA256SUMS
+      - name: Upload release assets
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: dist/release
+          if-no-files-found: error
+      - name: Upload browser installer
+        if: github.ref_type == 'tag'
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: dist/site
+
+  github-release:
+    if: github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Create or refresh GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/*.bin release-assets/SHA256SUMS --clobber
+            gh release edit "$TAG" --title "Grajek $TAG" --notes-file release-assets/RELEASE_NOTES.md
+          else
+            gh release create "$TAG" release-assets/*.bin release-assets/SHA256SUMS \
+              --verify-tag --title "Grajek $TAG" --notes-file release-assets/RELEASE_NOTES.md
+          fi
+
+  deploy-pages:
+    if: github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - name: Deploy browser installer
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
