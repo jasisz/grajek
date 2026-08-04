@@ -27,6 +27,7 @@ class ADSR {
   }
   bool active() const { return stage_ != Idle; }
   bool releasing() const { return stage_ == Release; }
+  float level() const { return env_; }
 
   float process() {
     switch (stage_) {

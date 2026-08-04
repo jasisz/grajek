@@ -42,8 +42,7 @@ void restoreMemory(double periodSec) { s_pulse.restoreMemory(periodSec); }
 
 void onOnset() { s_pulse.onOnset(extendedNowSec()); }
 
-void tick(bool suspended, const float* chordCents, int chordCount,
-          int playerPreset) {
+void tick(bool suspended, const float* chordCents, int chordCount) {
   const double now = extendedNowSec();  // maintain the high word every pass
   if (!s_engine) return;
   if (suspended) {
@@ -58,11 +57,10 @@ void tick(bool suspended, const float* chordCents, int chordCount,
   const gk::PulseBeat beat = s_pulse.tick(now, chordCount);
   if (!beat.play) return;
   const float cents = beat.chordIndex >= 0 ? chordCents[beat.chordIndex] : 0.0f;
-  // MUSICBOX ends by itself — no note-off bookkeeping; the FIFO preset
-  // sandwich is race-free (single producer, queue drained per render)
-  s_engine->setParam(ga::Param::TimbrePreset, (float)kMusicboxPreset);
-  s_engine->noteOn(kPulseId, cents, beat.velocity);
-  s_engine->setParam(ga::Param::TimbrePreset, (float)playerPreset);
+  // MUSICBOX ends by itself — no note-off bookkeeping. Its event owns the
+  // voice colour, so the player's global filter never flickers to MUSICBOX.
+  s_engine->noteOnWithPreset(kPulseId, cents, beat.velocity,
+                             kMusicboxPreset);
 }
 
 }  // namespace pulse

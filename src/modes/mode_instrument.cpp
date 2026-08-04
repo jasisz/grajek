@@ -47,6 +47,28 @@ int s_chimeStep = 0;  // pozycja melodii grzechotki na drabince skali
 int s_chimeSlot = 0;  // rotacja id nut dzwonków
 float s_imuTimer = 0.0f;
 
+// Optional GLIDE is deliberately only a tiny landing gesture, not a
+// monophonic synth mode. Fast sequential notes in one physical row may bend
+// into each other; a chord pressed in the same keyboard scan still attacks
+// cleanly and keeps every voice.
+struct RowLanding {
+  float cents = 0.0f;
+  uint32_t atMs = 0;
+  bool valid = false;
+};
+RowLanding s_rowLanding[4];
+// A chord pressed inside one keyboard scan must never read as a glide, so
+// both settings keep the same minimum gap. SOFT only catches quick steps
+// between neighbours; STRONG waits longer, forgives wider leaps and sings
+// the whole way — a deliberate portament rather than a landing.
+constexpr uint32_t kGlideMinGapMs = 24;
+constexpr uint32_t kSoftGlideMaxGapMs = 180;
+constexpr float kSoftGlideMaxJumpCents = 700.0f;
+constexpr float kSoftGlideSec = 0.045f;
+constexpr uint32_t kStrongGlideMaxGapMs = 420;
+constexpr float kStrongGlideMaxJumpCents = 1600.0f;
+constexpr float kStrongGlideSec = 0.170f;
+
 // zaplanowane noteOff dla dzwonków (krótkie nuty, wybrzmiewają release'em)
 struct PendingOff { uint32_t atMs; int32_t id; };
 PendingOff s_pending[8];
@@ -67,6 +89,7 @@ void ModeInstrument::enter(ModeCtx& ctx) {
   ambient::setCutoffBase(kNeutralCutoff);
   s_pendingCount = 0;
   s_windPhrase.active = false;
+  for (auto& landing : s_rowLanding) landing.valid = false;
   s_chimeStep = ga::scaleStepsPerOctave(settings::scale());  // start w środku
   viz::setScene(settings::vizScene());
   // scena mapuje wysokość na X/Y wg realnego zakresu siatki tej skali;
@@ -116,7 +139,24 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
     pulse::onOnset();  // even presses summon the heart, in YOUR tempo
     const int gridRow = 3 - row;
     const float cents = gridToCents(settings::scale(), gridCol, gridRow);
-    ctx.engine.noteOn(id, cents, 0.9f);
+    const uint32_t nowMs = millis();
+    const uint32_t gapMs = nowMs - s_rowLanding[row].atMs;
+    const settings::GlideMode mode = settings::glide();
+    const bool strong = mode == settings::GlideMode::Strong;
+    const uint32_t maxGapMs =
+        strong ? kStrongGlideMaxGapMs : kSoftGlideMaxGapMs;
+    const float maxJump =
+        strong ? kStrongGlideMaxJumpCents : kSoftGlideMaxJumpCents;
+    const bool glide = mode != settings::GlideMode::Off &&
+                       s_rowLanding[row].valid && gapMs >= kGlideMinGapMs &&
+                       gapMs <= maxGapMs &&
+                       fabsf(cents - s_rowLanding[row].cents) <= maxJump;
+    if (glide)
+      ctx.engine.noteOnGlide(id, s_rowLanding[row].cents, cents, 0.9f,
+                             strong ? kStrongGlideSec : kSoftGlideSec);
+    else
+      ctx.engine.noteOn(id, cents, 0.9f);
+    s_rowLanding[row] = {cents, nowMs, true};
     ambient::gardenPush(cents);
     viz::noteOn(id, cents, 0.9f);
     firefly::note(cents, 0.9f);
@@ -166,10 +206,7 @@ void ModeInstrument::playChimeNote(ModeCtx& ctx, float cents, float vel) {
   // Atak łagodny, ale KRÓTSZY niż nuta: przy 250 ms narastania i wyciszeniu
   // po 150 ms dźwięk gasł, zanim doszedł do pełni — wspomnień nie było
   // słychać. 60 ms wystarcza, by wiatr unosił nutę zamiast w nią uderzać.
-  ctx.engine.setParam(Param::EnvAttack, 0.06f);
-  ctx.engine.noteOn(id, cents, vel);
-  ctx.engine.setParam(Param::EnvAttack,
-                      ga::timbrePreset(settings::preset()).attack);
+  ctx.engine.noteOnWithPreset(id, cents, vel, settings::preset(), 0.06f);
   if (s_pendingCount < 8)
     s_pending[s_pendingCount++] = {millis() + 420, id};  // zdąży wybrzmieć
 
@@ -237,6 +274,7 @@ void ModeInstrument::imuStep(ModeCtx& ctx) {
     // prowadzi melodię w dół/górę
     const float dir = fabsf(lx) >= fabsf(ly) ? lx : ly;
     triggerChime(ctx, e, dir);
+    goodnight::noteActivity();  // waving the box IS playing it
   } else if (e < kSwingOff) {
     s_swingArmed = true;
   }

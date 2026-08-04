@@ -56,13 +56,12 @@ constexpr int32_t kLullabyVoiceId = 1104;
 // 7 s ciszy wystarczy — przy 12 s pamięć pudełka była praktycznie
 // niesłyszalna w normalnej zabawie (dziecko nie robi tak długich pauz)
 constexpr uint32_t kGhostIdleMs = 7000;
-float s_presetAttack = 0.003f;
 struct PendingOff { uint32_t atMs; int32_t id; };
 PendingOff s_pending[6];
 int s_pendingCount = 0;
 
 int s_uiPreset = 3;           // what the player's keys currently use
-constexpr int kBgPreset = 1;  // the background always speaks DRONE
+constexpr int kBgPreset = 1;  // the background always speaks ORGAN
 
 // okno dla wizualizacji
 float s_breathe = 1.0f;
@@ -128,10 +127,7 @@ int32_t allocateBgId() {
 }
 
 void bgNoteOn(int32_t id, float cents, float vel) {
-  // timbre sandwich: FIFO queue, single producer — race-free
-  s_engine->setParam(ga::Param::TimbrePreset, (float)kBgPreset);
-  s_engine->noteOnPersistent(id, cents, vel);
-  s_engine->setParam(ga::Param::TimbrePreset, (float)s_uiPreset);
+  s_engine->noteOnPersistentWithPreset(id, cents, vel, kBgPreset);
 }
 
 void backgroundApplyAll() {
@@ -157,6 +153,11 @@ void weatherTick(uint32_t nowMs) {
   // głębia z przechyłu do/od siebie: mnożnik na echo i pogłos pogody
   const float space = 0.5f + s_spaceBase;  // 0.5..1.5, neutralnie 1.0
   if (hal::echoAvailable()) {
+    // The tape remains a free three-second memory. Only its quieter second
+    // head borrows the player's discovered pulse, and gives it back gently
+    // when the PLL stops ticking.
+    hal::echo().setRhythmicTap((float)s_beatGrid.periodSec,
+                              s_beatGrid.ticking);
     hal::echo().setLevel(ga::clampf(
         (0.45f + 0.25f * breathe + 0.05f * t1) * space, 0.15f, 0.90f));
     hal::echo().setFeedback(
@@ -200,17 +201,15 @@ void ghostSilenceAll() {
   s_ghostMask = 0;
 }
 
-// one ghost voice: soft attack sandwich + scheduled note-off + viz event
+// one ghost voice: per-event soft attack + scheduled note-off + viz event
 void ghostPlay(float sourceCents, float playedCents, float vel, float attack,
                uint32_t nowMs, uint32_t holdMs) {
   const int slot = s_ghostSlot++ & 3;
   const int32_t id = kGhostIdBase + slot;
   s_ghostMask |= (1u << slot);
-  // soft attack just for this note — the engine queue is FIFO, single
-  // producer, drained fully before each render: the sandwich is race-free
-  s_engine->setParam(ga::Param::EnvAttack, attack);
-  s_engine->noteOn(id, playedCents, vel);
-  s_engine->setParam(ga::Param::EnvAttack, s_presetAttack);
+  // The attack belongs to this event. A full queue can no longer accept a
+  // temporary global change and lose its restore, leaving later keys slow.
+  s_engine->noteOnWithPreset(id, playedCents, vel, s_uiPreset, attack);
   s_lastGhostSourceCents = sourceCents;
   s_lastGhostPlayedCents = playedCents;
   s_ghostEvent = true;
@@ -225,11 +224,7 @@ void lullabyPlay(float cents, float vel) {
   // A bedtime voice must not inherit a bright/percussive player preset.
   // PURE plus a long attack leaves the remembered contour intact, but takes
   // the hard edge off CHIME/MUSICBOX and lets it disappear into the room.
-  s_engine->setParam(ga::Param::TimbrePreset, 0.0f);
-  s_engine->setParam(ga::Param::EnvAttack, 0.72f);
-  s_engine->noteOn(kLullabyVoiceId, cents, vel);
-  s_engine->setParam(ga::Param::TimbrePreset, (float)s_uiPreset);
-  s_engine->setParam(ga::Param::EnvAttack, s_presetAttack);
+  s_engine->noteOnWithPreset(kLullabyVoiceId, cents, vel, 0, 0.72f);
   s_lastGhostSourceCents = cents;
   s_lastGhostPlayedCents = cents;
   s_ghostEvent = true;
@@ -585,7 +580,6 @@ void setPreset(int idx) {
   if (idx < 0) idx = 0;
   if (idx >= ga::kNumTimbrePresets) idx = ga::kNumTimbrePresets - 1;
   s_uiPreset = idx;
-  s_presetAttack = ga::timbrePreset(idx).attack;
 }
 
 }  // namespace ambient

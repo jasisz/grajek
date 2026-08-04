@@ -16,6 +16,7 @@ class FaceDownGesture {
 
   Event update(uint32_t nowMs, float accelZ, bool sleeping) {
     if (accelZ < kEnterZ) {
+      faceDown_ = true;
       if (!candidate_) {
         candidate_ = true;
         requested_ = false;
@@ -26,9 +27,15 @@ class FaceDownGesture {
         return Event::Sleep;
       }
     } else if (accelZ > kLeaveZ) {
+      // Waking means LEAVING face-down, which is only meaningful if the box
+      // was down in the first place. Sleep can also begin from an idle timer
+      // with the box sitting face up (see IdleSleep), and that must not read
+      // as a lift on the very next sample.
+      const bool lifted = faceDown_;
+      faceDown_ = false;
       candidate_ = false;
       requested_ = false;
-      if (sleeping) return Event::Wake;
+      if (sleeping && lifted) return Event::Wake;
     }
     return Event::None;
   }
@@ -44,4 +51,5 @@ class FaceDownGesture {
   uint32_t sinceMs_ = 0;
   bool candidate_ = false;
   bool requested_ = false;
+  bool faceDown_ = false;
 };

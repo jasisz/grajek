@@ -23,6 +23,7 @@ struct BeatGrid {
   double nowSec = 0.0;
   double periodSec = 0.0;
   double lastOnsetSec = 0.0;
+  bool ticking = false;
 };
 
 enum class SaveRequest : uint8_t { None, Soul, SoulAndSettings };
@@ -102,8 +103,8 @@ float backgroundNoteCents(int i);
 // playedCents drives the firefly after the phrase-wide transposition.
 bool pollGhost(float* sourceCents, float* playedCents);
 // the player's current preset index: ghosts play with it, while the
-// background keeps its own DRONE timbre (via a FIFO queue sandwich —
-// a percussive player preset must not silently kill the drone)
+// background keeps its own per-note ORGAN timbre (a percussive player preset
+// must not silently kill the drone or disturb the player's global filter)
 void setPreset(int idx);
 
 }  // namespace ambient

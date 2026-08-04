@@ -1,9 +1,10 @@
 // Audio output: I2S -> ES8311 -> NS4150B/speaker or the 3.5mm jack.
 // We deliberately do NOT use M5.Speaker (its mixer adds buffering = latency);
 // the full grajek chain runs in our own task pinned to core 0:
-//   engine -> sympathetic strings -> echo tape (lo-fi 16 kHz bridge)
+//   engine -> sympathetic strings -> chorus -> echo tape (lo-fi 16 kHz bridge)
 //          -> reverb -> I2S DMA
 #pragma once
+#include "ga_chorus.h"
 #include "ga_echo.h"
 #include "ga_engine.h"
 #include "ga_reverb.h"
@@ -19,7 +20,12 @@ bool audioReady();
 
 // Chain accessors for modes / the ambient brain (control-thread safe —
 // all module setters are atomic).
+// Swap the output voicing between the internal 3 cm speaker and the 3.5 mm
+// jack. Control-thread safe; the filter state is not disturbed.
+void setJackVoicing(bool jack);
+
 ga::SympatheticStrings& strings();
+ga::Chorus& chorus();
 ga::EchoTape& echo();
 ga::Reverb& reverb();
 bool echoAvailable();  // false if the tape buffer could not be allocated

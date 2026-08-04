@@ -23,10 +23,17 @@ UNAME := $(shell uname -s)
 
 all: $(BUILD)/grajek_host live
 
-test: $(BUILD)/face_down_gesture_test $(BUILD)/core_state_test \
+test: $(BUILD)/face_down_gesture_test $(BUILD)/idle_sleep_test \
+	$(BUILD)/core_state_test \
+	$(BUILD)/echo_tape_test $(BUILD)/chorus_test \
+	$(BUILD)/audio_engine_test \
 	$(BUILD)/scale_registry_test $(BUILD)/i18n_pl_test $(BUILD)/i18n_en_test
 	./$(BUILD)/face_down_gesture_test
+	./$(BUILD)/idle_sleep_test
 	./$(BUILD)/core_state_test
+	./$(BUILD)/echo_tape_test
+	./$(BUILD)/chorus_test
+	./$(BUILD)/audio_engine_test
 	./$(BUILD)/scale_registry_test
 	./$(BUILD)/i18n_pl_test
 	./$(BUILD)/i18n_en_test
@@ -35,9 +42,27 @@ $(BUILD)/face_down_gesture_test: face_down_gesture_test.cpp ../src/modes/face_do
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) face_down_gesture_test.cpp -o $@
 
+$(BUILD)/idle_sleep_test: idle_sleep_test.cpp $(APP)/modes/idle_sleep.h \
+		$(APP)/modes/face_down_gesture.h
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) idle_sleep_test.cpp -o $@
+
 $(BUILD)/core_state_test: core_state_test.cpp $(CORE_CPP) $(HDR)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) core_state_test.cpp $(CORE_CPP) -o $@
+
+$(BUILD)/echo_tape_test: echo_tape_test.cpp $(ENGINE)/ga_echo.h \
+		$(ENGINE)/ga_dsp.h
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) echo_tape_test.cpp -o $@
+
+$(BUILD)/chorus_test: chorus_test.cpp $(ENGINE)/ga_chorus.h
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) chorus_test.cpp -o $@
+
+$(BUILD)/audio_engine_test: audio_engine_test.cpp $(ENGINE_CPP) $(HDR)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) audio_engine_test.cpp $(ENGINE_CPP) -o $@
 
 $(BUILD)/scale_registry_test: scale_registry_test.cpp $(ENGINE)/ga_scales.cpp \
 		$(ENGINE)/ga_scales.h

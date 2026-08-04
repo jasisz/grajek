@@ -44,14 +44,15 @@ captured timing kept inside gentle playback-safe bounds; waving direction
 steers the occasional whole-phrase transposition up or down, and swing energy
 sets the loudness; **tilt** it and everything darkens or brightens (slow and
 smooth, like turning the box away from the light); **lay it face-down** after
-playing and the remembered garden sings itself to sleep.
+playing and the remembered garden sings itself to sleep — and if it is simply
+left alone for a few minutes, it reaches the same bedtime by itself.
 
 ## Status
 
 - **Laptop rig (macOS)**: fully playable, this is where everything is
   designed and measured — see below.
 - **Device firmware**: plays on real hardware — the whole chain is ported
-  (engine → strings → lo-fi tape → reverb, ambient brain, IMU gestures)
+  (engine → strings → chorus → lo-fi tape → reverb, ambient brain, IMU gestures)
   with five visualization scenes. It boots directly into play and has one
   settings screen behind BtnGO, rather than a mode menu. Also on the device:
   the **heart** (tempo entrainment — a PLL on your key
@@ -59,15 +60,18 @@ playing and the remembered garden sings itself to sleep.
   pauses; the garden keeps phrase boundaries and timing, while the box still
   greets you with one remembered note), a
   **WS2812 firefly** that flashes in the color of foreground notes and dims
-  with the battery, the **goodnight lullaby** (lay it
-  face-down), **psychoacoustic bass** voiced for the 3 cm speaker, the
+  with the battery, the **goodnight lullaby** (lay it face-down, or just stop
+  playing for three minutes), **psychoacoustic bass** voiced for the 3 cm
+  speaker, the
   grid tuned to the *physical* keyboard stagger (4-T-F-C is one chord),
   and the EDO scales lifted an octave into the same register as the JI
   scales.
-- The shared garden, pulse, lullaby and background-preset models, both LCD
-  languages, the scale registry and the hardware-independent face-down dwell
-  have host tests. The English and Polish firmware images are also verified
-  with separate end-to-end PlatformIO builds.
+- The synthesis presets and releases, stuck-note queue safety, chorus, echo,
+  the inactivity timer that ends the day on its own,
+  shared garden, pulse, lullaby and background-preset models, both LCD
+  languages, scale registry and the hardware-independent face-down dwell and
+  idle timer have host tests. The English and Polish firmware images are also verified with
+  separate end-to-end PlatformIO builds.
 
 ---
 
@@ -77,7 +81,7 @@ Priority: low latency and smooth sound — this is a live instrument.
 
 ```
 lib/grajek_audio/   synthesis engine — pure C++17, ZERO hardware dependencies
-                    (sine-partial oscillators, ADSR, SVF filter,
+                    (sine-partial + PolyBLEP saw/pulse oscillators, ADSR, SVF,
                      scales: pentatonic/major/11-limit JI, 12/19/31-EDO, WOLF,
                      lock-free event queue; the same code runs on the ESP32
                      and on a laptop)
@@ -97,7 +101,7 @@ src/                ESP32 firmware (PlatformIO / Arduino core 3.x):
   soul.cpp          what survives the power switch (garden/chord/pulse, NVS)
   firefly.cpp       the WS2812 firefly + battery dusk
   i18n.cpp          compile-time LCD text (English default, Polish variant)
-  settings.cpp      scale/timbre/octave/background/scene state, in NVS
+  settings.cpp      scale/timbre/octave/background/scene/glide state, in NVS
   main.cpp          main loop; boots straight into playing
 ```
 
@@ -212,8 +216,8 @@ saved NVS format.
 The box **boots straight into playing**: there is no mode picker or setup
 wizard. In INSTRUMENT all 56 keys are music: column = scale step, bottom row =
 the lowest interval, and the digit row follows the keyboard's physical
-one-column stagger. USTAWIENIA is the deliberate exception: digits 1–5 change
-its five rows; every other keyboard key only wakes the box.
+one-column stagger. USTAWIENIA is the deliberate exception: digits 1–6 change
+its six rows; every other keyboard key only wakes the box.
 
 Everything else hangs off the one side button:
 
@@ -227,14 +231,18 @@ Everything else hangs off the one side button:
 | **tilt toward / away** | depth: the sound moves into the reverb and echo, or comes close and dry |
 | **lay face-down** (after playing) | goodnight: the screen and firefly switch off, then recent remembered phrases replay as a quiet, slowing lullaby — lifting the box, BtnGO or any keyboard key wakes it instantly |
 
-The settings screen (short BtnGO) has five rows, each cycled by its digit
+The settings screen (short BtnGO) has six rows, each cycled by its digit
 and persisted in NVS: **scale** (ordered happy → strange: pentatonic JI,
-just major, 12-EDO, 19-EDO, 31-EDO, 11-limit Partch, WOLF), **timbre**,
+just major, 12-EDO, 19-EDO, 31-EDO, 11-limit Partch, WOLF), **timbre**
+(the five additive colors plus WARM filtered saw and HOLLOW breathing pulse),
 **octave**, **background layer** (off → root → a breathing two-note drone whose
 upper voice moves between fifth and harmonic seventh → a fixed
 root/fifth/harmonic-seventh halo; the Polish labels are *cisza*, *fundament*,
-*dron* and *aureola*), and
-**visualization scene**.
+*dron* and *aureola*), **visualization scene**, and **glide** (off → soft →
+strong). Glide is off by default. SOFT gives quick neighbouring notes in one
+physical row a short pitch landing; STRONG waits longer between keys, forgives
+much wider leaps and sings the whole way, a deliberate portamento. Simultaneous
+chords and the preceding voice remain polyphonic in both.
 
 Two design laws are enforced here rather than explained: the shake plays
 *remembered phrases* instead of a scale, so the keyboard and the gesture
@@ -263,13 +271,16 @@ The same notes, memories and gestures drive five scenes that differ in
 
 ### Sound chain on the device
 
-Same portable modules as the host: engine → sympathetic strings → echo tape
-(3 s at 16 kHz behind a lo-fi rate bridge — no PSRAM, and the aging tape
-loves the darkening anyway) → reverb → speaker voicing (a 180 Hz high-pass
-plus a gentle presence shelf: the membrane is never asked for air it cannot
-move, while the engine's **virtual-pitch bass** shifts each low note's
+Same portable modules as the host: engine → sympathetic strings → a subtle
+preset-specific chorus → echo tape (3 s at 16 kHz behind a lo-fi rate bridge —
+no PSRAM, and the aging tape loves the darkening anyway) → reverb → speaker
+voicing (a 180 Hz high-pass plus a gentle presence shelf: the membrane is never
+asked for air it cannot move, while the engine's **virtual-pitch bass** shifts each low note's
 fundamental energy into partials that reconstruct the perceived bass when the
-timbre's partial structure permits it) → a hard output ceiling. The ambient
+timbre's partial structure permits it) → a hard output ceiling. The main tape
+head remains a free three-second memory; its quieter second head gradually
+answers at a dotted eighth of the pulse only while the player's tempo PLL is
+confident, then drifts back to its free golden-ratio position. The ambient
 brain (background chord, weather, ghost
 garden) runs from boot.
 
@@ -294,7 +305,12 @@ source notes are in `src/hal/board_pins.h`.
 
 - **Own I2S path instead of `M5.Speaker`** — skips the M5Unified mixer; the
   audio task runs on **core 0** (UI owns core 1), DMA buffers 4×96 frames,
-  synthesis in 96-sample blocks @ 48 kHz. The ES8311 output setup follows
+  synthesis in 96-sample blocks @ 48 kHz. The rate is a CPU budget as much as a
+  bandwidth choice: one block must be finished inside 2 ms or the audio task
+  stops yielding and starves the idle task into a watchdog reset. It fits at
+  ~69%; the ambience (strings, reverb, tape) runs behind lo-fi bridges at a
+  whole-number fraction of it, so only the wet path is band-limited while the
+  played notes stay full rate. The ES8311 output setup follows
   the official M5Unified Cardputer-ADV playback callback.
 - The engine never allocates after `init()` and is controlled exclusively
   through an SPSC queue — no mutexes anywhere near the audio path.
@@ -334,9 +350,11 @@ source notes are in `src/hal/board_pins.h`.
 2. Keys stay clean **with no clicks/dropouts** while the UI is stressed —
    hold several keys, shake, switch scenes.
 3. Short BtnGO opens settings and returns; holding it while playing cycles
-   the timbre; background cycles through silence, root, drone and halo; every
-   choice survives a power cycle (NVS). Old boolean background settings migrate
-   to silence or the original drone.
+   all seven timbres; background cycles through silence, root, drone and halo;
+   glide starts off and, in row 6, cycles off → soft → strong, affecting quick
+   same-row runs without collapsing chords; every choice survives a power
+   cycle (NVS), and the old boolean glide setting migrates to off/soft.
+   Old boolean background settings migrate to silence or the original drone.
 4. When no replay is active, shaking starts one remembered phrase (with its
    timing bounded to 70–1200 ms between notes, not an instant burst); an empty
    garden produces one safe note. Waving left/right steers the whole phrase

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ga_echo.h"
+#include "ga_chorus.h"
 #include "ga_engine.h"
 #include "ga_reverb.h"
 #include "ga_scales.h"
@@ -31,7 +32,8 @@ struct Cue {
 // Renders through the FULL instrument chain (strings, aging tape, reverb) —
 // the demo files should sound like the instrument, not like a bare engine.
 void renderSong(const std::string& path, double seconds, Engine& e,
-                std::vector<Cue> cues, float rootHz = 220.0f) {
+                std::vector<Cue> cues, float rootHz = 220.0f,
+                float chorusDepth = 0.0f) {
   std::stable_sort(cues.begin(), cues.end(),
                    [](const Cue& a, const Cue& b) { return a.t < b.t; });
 
@@ -41,6 +43,9 @@ void renderSong(const std::string& path, double seconds, Engine& e,
   SympatheticStrings strings;
   strings.init(kSr);
   strings.setRootHz(rootHz);
+  Chorus chorus;
+  chorus.init(kSr);
+  chorus.setDepth(chorusDepth);
   std::vector<int16_t> tape((size_t)(4.0 * kSr));
   EchoTape echo;
   echo.init(tape.data(), (uint32_t)tape.size(), (float)kSr);
@@ -63,6 +68,7 @@ void renderSong(const std::string& path, double seconds, Engine& e,
     const int n = (int)std::min((size_t)kBlock, total - done);
     e.process(buf, n);
     strings.process(buf, buf, n);
+    chorus.process(buf, n);
     echo.process(buf, buf, n);
     reverb.process(buf, n);
     for (int i = 0; i < n; ++i) buf[i] = softClip(buf[i]) * 0.85f;
@@ -155,6 +161,39 @@ void demoDrone(const std::string& dir) {
   renderSong(dir + "/03_drone.wav", 20.0, e, c, 110.0f);
 }
 
+void demoBroadColours(const std::string& dir) {
+  const float phrase[] = {0.0f, 386.3f, 702.0f, 1200.0f, 702.0f, 386.3f};
+  for (int preset = 5; preset <= 6; ++preset) {
+    Engine e;
+    e.init(kSr);
+    std::vector<Cue> cues = {
+        {0.00, [preset](Engine& en) {
+           en.setParam(Param::TimbrePreset, (float)preset);
+           en.setParam(Param::BaseHz, 220.0f);
+           en.setParam(Param::FilterCutoffHz, 7500.0f);
+         }},
+    };
+    double t = 0.12;
+    for (int i = 0; i < 6; ++i) {
+      const float cents = phrase[i];
+      const float fromCents = i > 0 ? phrase[i - 1] : cents;
+      cues.push_back({t, [i, cents, fromCents](Engine& en) {
+                        if (i > 0)
+                          en.noteOnGlide(20 + i, fromCents, cents, 0.82f);
+                        else
+                          en.noteOn(20, cents, 0.82f);
+                      }});
+      cues.push_back({t + 0.34,
+                      [i](Engine& en) { en.noteOff(20 + i); }});
+      t += 0.38;
+    }
+    const Timbre timbre = timbrePreset(preset);
+    const char* name = preset == 5 ? "04_warm.wav" : "05_hollow.wav";
+    renderSong(dir + "/" + name, t + 2.0, e, cues, 220.0f,
+               timbre.chorusDepth);
+  }
+}
+
 void printGridTables() {
   printf("\nGrid (bottom row, BaseHz=220):\n");
   for (int s = 0; s < (int)ScaleId::Count; ++s) {
@@ -183,6 +222,7 @@ int main(int argc, char** argv) {
   demoSingleNote(dir);
   demoGrid(dir);
   demoDrone(dir);
+  demoBroadColours(dir);
   printGridTables();
   printf("\nListen:  afplay %s/01_single_note.wav\n", dir.c_str());
   return g_renderOk ? 0 : 1;

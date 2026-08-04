@@ -24,11 +24,22 @@ struct Event {
   enum Type : uint8_t { None, NoteOn, NoteOff, AllOff, SetParam };
   Type type = None;
   Param param = Param::MasterGain;
+  // -1 uses the player's current timbre. Ambient voices can name a preset on
+  // their own event without temporarily mutating the global colour/filter.
+  int8_t preset = -1;
+  bool persistent = false;  // NoteOn: steal only as a last resort
   int32_t id = 0;   // note identifier (e.g. key index)
   float a = 0.0f;   // NoteOn: cents; SetParam: value
   float b = 0.0f;   // NoteOn: velocity 0..1
-  bool persistent = false;  // NoteOn: steal only as a last resort
+  // NoteOn: explicit glide start, or attack seconds when attackOverride=true.
+  float c = 0.0f;
+  bool glideFrom = false;   // NoteOn: start at c, then slew to a
+  bool attackOverride = false;
+  // NoteOn with glideFrom: how long the landing takes. Milliseconds fit the
+  // struct's existing padding, so the queue message does not grow.
+  uint8_t glideMs = 45;
 };
+static_assert(sizeof(Event) <= 24, "EventQueue control messages grew too large");
 
 // Single producer (UI/input), single consumer (audio). N = power of two.
 template <int N>

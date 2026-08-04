@@ -96,20 +96,30 @@ void setup() {
     }
   }
 
-  // Synth at 48 kHz.
+  // Synth at 48 kHz — full bandwidth, because this box also plays through the
+  // 3.5 mm jack into real speakers. It only fits because the audio task was
+  // brought from 152% of its block budget down to ~65%; see the block-budget
+  // note in hal/audio_out.cpp before raising anything that costs time.
   engine.init(48000.0f);
   engine.setParam(ga::Param::FilterCutoffHz, 7500.0f);
 
   audioOk = hal::audioInit(&engine);
   if (!audioOk) Serial.println("grajek: audio init FAILED");
 
+  // Read the remembered choices BEFORE the ambient brain queues its first
+  // chord, and hand the engine the saved octave straight away: the background
+  // drone starts during init, and without this its pitch centre would snap
+  // from the default to the saved one in the middle of its 0.8 s attack.
+  // The full applyToEngine still has to wait until ambient exists, because it
+  // talks to it.
+  settings::load();
+  engine.setParam(ga::Param::BaseHz, settings::baseHz());
+
   // the ambient brain: background chord, weather, ghost garden — alive from
   // boot, in the menu too (the box hums the moment it wakes up)
   ambient::init(&engine);
   pulse::init(&engine);  // the heart waits for a few even key presses
 
-  // zapamiętane wybory (skala, barwa, oktawa, tło) wracają po włączeniu
-  settings::load();
   settings::applyToEngine(engine);
   // ...i dusza: ogród wspomnień, własne tło, puls — z jednym cichym
   // powitaniem wczorajszą nutą (patrz soul.h)
@@ -205,7 +215,7 @@ void loop() {
 
   const ambient::BeatGrid beatGrid{pulse::nowSec(),
                                    pulse::memoryPeriodSec(),
-                                   pulse::lastOnsetSec()};
+                                   pulse::lastOnsetSec(), pulse::ticking()};
   ambient::tick(beatGrid);
 
   // Ambient chooses a musically safe instant; the app coordinator owns the
@@ -223,9 +233,18 @@ void loop() {
   const int pulseChordCount = ambient::backgroundNoteCount();
   for (int i = 0; i < pulseChordCount && i < 4; ++i)
     pulseChord[i] = ambient::backgroundNoteCents(i);
-  pulse::tick(ambient::lullabyActive(), pulseChord, pulseChordCount,
-              settings::preset());
+  pulse::tick(ambient::lullabyActive(), pulseChord, pulseChordCount);
   firefly::tick();
+
+
+
+
+
+
+
+
+
+
 
   delay(2);  // breathing room for WDT/USB; audio lives on the other core anyway
 }

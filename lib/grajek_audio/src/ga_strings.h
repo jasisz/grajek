@@ -30,8 +30,8 @@ class SympatheticStrings {
       memset(buf_[s], 0, sizeof(buf_[s]));
       len_[s] = lenFor(220.0f, s);
       damp_[s] = dcX_[s] = dcY_[s] = 0.0f;
-      w_[s] = 0;
     }
+    w_ = 0;
     root_.store(220.0f);
     enabled_.store(true);
   }
@@ -62,11 +62,12 @@ class SympatheticStrings {
       len_[s] += d;
     }
 
+    int w = w_;
     for (int i = 0; i < n; ++i) {
       const float x = in[i] * kExcite;
       float sum = 0.0f;
       for (int s = 0; s < kNumStrings; ++s) {
-        float rp = (float)w_[s] - len_[s];
+        float rp = (float)w - len_[s];
         if (rp < 0.0f) rp += (float)kMaxLen;
         const int i0 = (int)rp;
         int i1 = i0 + 1;
@@ -84,12 +85,16 @@ class SympatheticStrings {
         float v = hp * kFb + x;
         if (v > 1.0f) v = 1.0f;
         if (v < -1.0f) v = -1.0f;
-        buf_[s][w_[s]] = (int16_t)(v * 32767.0f);
-        if (++w_[s] >= kMaxLen) w_[s] = 0;
+        buf_[s][w] = (int16_t)(v * 32767.0f);
         sum += rd;
       }
+      // All five strings share one write head: they are initialised together
+      // and advanced by exactly one against the same bound, so keeping five
+      // copies of the same counter only bought five load/compare/store chains.
+      if (++w >= kMaxLen) w = 0;
       out[i] += sum * kHalo;
     }
+    w_ = w;
   }
 
  private:
@@ -112,7 +117,7 @@ class SympatheticStrings {
   float damp_[kNumStrings] = {0};
   float dcX_[kNumStrings] = {0};
   float dcY_[kNumStrings] = {0};
-  int w_[kNumStrings] = {0};
+  int w_ = 0;  // shared write head, see process()
   float sr_ = 48000.0f;
   std::atomic<float> root_{220.0f};
   std::atomic<bool> enabled_{true};

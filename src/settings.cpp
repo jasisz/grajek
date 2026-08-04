@@ -16,12 +16,17 @@ int s_preset = 3;    // CHIME — ładne samo z siebie
 int s_octave = 2;    // 220 Hz
 gk::BackgroundId s_bgPreset = gk::BackgroundId::Drone;
 int s_vizScene = 0;  // nocna łąka
+settings::GlideMode s_glide =
+    settings::GlideMode::Off;  // zwykły Grajek ląduje bez ślizgu
+settings::OutputMode s_output = settings::OutputMode::Speaker;
 
 constexpr uint8_t kDirtyScale = 1u << 0;
 constexpr uint8_t kDirtyPreset = 1u << 1;
 constexpr uint8_t kDirtyOctave = 1u << 2;
 constexpr uint8_t kDirtyBackground = 1u << 3;
 constexpr uint8_t kDirtyScene = 1u << 4;
+constexpr uint8_t kDirtyGlide = 1u << 5;
+constexpr uint8_t kDirtyOutput = 1u << 6;
 uint8_t s_dirty = 0;
 
 }  // namespace
@@ -49,6 +54,12 @@ void load() {
       legacyBackgroundOn);
   s_bgPreset = background.id;
   s_vizScene = p.getUChar("scena", 0) % viz::kSceneCount;
+  // Migracja: dawniej ślizg był zwykłym bool-em pod kluczem "glide".
+  const uint8_t legacyGlide = p.getBool("glide", false) ? 1 : 0;
+  const uint8_t stored = p.getUChar("glidem", legacyGlide);
+  s_glide = (settings::GlideMode)(stored > 2 ? 0 : stored);
+  s_output = p.getUChar("out", 0) ? settings::OutputMode::Jack
+                                  : settings::OutputMode::Speaker;
   p.end();
   s_dirty = background.needsWrite ? kDirtyBackground : 0;
 }
@@ -81,6 +92,12 @@ bool save() {
   if ((s_dirty & kDirtyScene) &&
       p.putUChar("scena", (uint8_t)s_vizScene) == sizeof(uint8_t))
     saved |= kDirtyScene;
+  if ((s_dirty & kDirtyGlide) &&
+      p.putUChar("glidem", (uint8_t)s_glide) == sizeof(uint8_t))
+    saved |= kDirtyGlide;
+  if ((s_dirty & kDirtyOutput) &&
+      p.putUChar("out", (uint8_t)s_output) == sizeof(uint8_t))
+    saved |= kDirtyOutput;
   p.end();
   if (parked) hal::audioResumeAfterFlash();
   s_dirty &= ~saved;
@@ -124,6 +141,8 @@ void cycleBackground() {
 }
 
 int vizScene() { return s_vizScene; }
+GlideMode glide() { return s_glide; }
+OutputMode output() { return s_output; }
 
 void cycleVizScene() {
   s_vizScene = (s_vizScene + 1) % viz::kSceneCount;
@@ -131,11 +150,28 @@ void cycleVizScene() {
   s_dirty |= kDirtyScene;
 }
 
+void cycleOutput() {
+  s_output = s_output == OutputMode::Speaker ? OutputMode::Jack
+                                             : OutputMode::Speaker;
+  s_dirty |= kDirtyOutput;
+}
+
+void cycleGlide() {
+  s_glide = (GlideMode)(((uint8_t)s_glide + 1) % 3);
+  s_dirty |= kDirtyGlide;
+}
+
 void applyToEngine(ga::Engine& e) {
   const float root = baseHz();
   e.setParam(ga::Param::BaseHz, root);
   hal::strings().setRootHz(root);  // halo strun dostraja się do centrum
   e.setParam(ga::Param::TimbrePreset, (float)s_preset);
+  hal::chorus().setDepth(ga::timbrePreset(s_preset).chorusDepth);
+  // The jack drives a speaker that can actually move air below 250 Hz, so the
+  // virtual-pitch trick would only hollow the bass out.
+  const bool jack = s_output == OutputMode::Jack;
+  hal::setJackVoicing(jack);
+  e.setParam(ga::Param::BassVoicing, jack ? 0.0f : 1.0f);
   ambient::setPreset(s_preset);
   // Preserve a soul-restored custom chord on later timbre/octave changes.
   if (ambient::backgroundSelectedPreset() != s_bgPreset)

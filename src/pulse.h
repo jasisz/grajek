@@ -13,8 +13,8 @@ void init(ga::Engine* engine);
 void onOnset();  // every real key-down (grid notes only)
 // App-owned context is passed explicitly, keeping Pulse independent from
 // ambient/settings and making the dependency graph acyclic.
-void tick(bool suspended, const float* chordCents, int chordCount,
-          int playerPreset);  // once per main-loop pass
+void tick(bool suspended, const float* chordCents,
+          int chordCount);  // once per main-loop pass
 // Wrap-extended Arduino clock shared with phrase scheduling.
 double nowSec();
 

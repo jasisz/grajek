@@ -19,7 +19,16 @@ enum class TextId : uint8_t {
   LabelOctave,
   LabelBackground,
   LabelScene,
+  LabelGlide,
+  LabelOutput,
   PlayGreeting,
+
+  GlideOff,
+  GlideSoft,
+  GlideStrong,
+
+  OutputSpeaker,
+  OutputJack,
 
   BackgroundOff,
   BackgroundRoot,
@@ -31,6 +40,8 @@ enum class TextId : uint8_t {
   PresetReed,
   PresetChime,
   PresetMusicBox,
+  PresetWarm,
+  PresetHollow,
 
   SceneMeadow,
   SceneCosmos,

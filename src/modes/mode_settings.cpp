@@ -45,6 +45,11 @@ void ModeSettings::onKey(ModeCtx& ctx, int col, int row, bool down) {
       break;
     case 4: settings::cycleBackground(); break;
     case 5: settings::cycleVizScene(); break;
+    case 6: settings::cycleGlide(); break;
+    case 7:
+      settings::cycleOutput();
+      settings::applyToEngine(ctx.engine);
+      break;
     default: return;
   }
   markDirty();
@@ -90,24 +95,43 @@ void ModeSettings::draw(ModeCtx& ctx) {
 
   // krótkie etykiety: przy rozmiarze 2 kolumna wartości startuje na 100 px,
   // a najdłuższa nazwa skali ("JI 11-limit") kończy się dokładnie w kadrze
-  const char* labels[5] = {
+  const char* labels[7] = {
       i18n::tr(i18n::TextId::LabelScale),
       i18n::tr(i18n::TextId::LabelTimbre),
       i18n::tr(i18n::TextId::LabelOctave),
       i18n::tr(i18n::TextId::LabelBackground),
       i18n::tr(i18n::TextId::LabelScene),
+      i18n::tr(i18n::TextId::LabelGlide),
+      i18n::tr(i18n::TextId::LabelOutput),
   };
-  const char* values[5];
+  const char* values[7];
   values[0] = i18n::scaleName(settings::scale());
   values[1] = settings::presetName(settings::preset());
   snprintf(buf, sizeof buf, "%d Hz", (int)settings::baseHz());
   values[2] = buf;
   values[3] = i18n::backgroundName(settings::backgroundPreset());
   values[4] = viz::sceneName(settings::vizScene());
+  switch (settings::glide()) {
+    case settings::GlideMode::Soft:
+      values[5] = i18n::tr(i18n::TextId::GlideSoft);
+      break;
+    case settings::GlideMode::Strong:
+      values[5] = i18n::tr(i18n::TextId::GlideStrong);
+      break;
+    default:
+      values[5] = i18n::tr(i18n::TextId::GlideOff);
+      break;
+  }
+  values[6] = i18n::tr(settings::output() == settings::OutputMode::Jack
+                           ? i18n::TextId::OutputJack
+                           : i18n::TextId::OutputSpeaker);
 
+  // Seven rows at the font's own 16 px cell: the last tops at y=118 and ends
+  // at 133, inside the 135 px panel. A tighter pitch would fit too, but each
+  // row paints an opaque background and would eat the descenders above it.
   g.setTextSize(2);
-  for (int i = 0; i < 5; ++i) {
-    const int y = 26 + i * 17;
+  for (int i = 0; i < 7; ++i) {
+    const int y = 22 + i * 16;
     g.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
     g.drawString(labels[i], 6, y);
     g.setTextColor(TFT_WHITE, TFT_BLACK);

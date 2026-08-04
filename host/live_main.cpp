@@ -54,6 +54,7 @@
 #include <stdlib.h>
 
 #include "ga_echo.h"
+#include "ga_chorus.h"
 #include "ga_engine.h"
 #include "ga_looper.h"
 #include "ga_reverb.h"
@@ -73,6 +74,7 @@ constexpr int kNumBufs = 3;         // ~16 ms total output latency
 
 Engine g_engine;
 Looper g_looper;
+Chorus g_chorus;
 EchoTape g_echo;   // always-on ambient memory: play anything, it comes back
 Reverb g_reverb;   // the single biggest "sounds pretty by itself" ingredient
 constexpr int kMaxLoopSec = 60;
@@ -104,17 +106,15 @@ int g_bgCount = 2;
 bool g_bgCustom = false;   // a hand-picked background silences the weather vote
 int32_t g_bgNextId = 2;    // rotates through ids 1000..1015
 
-// The background has its OWN timbre (DRONE), independent of what the player
+// The background has its OWN timbre (ORGAN), independent of what the player
 // plays with — a percussive preset (MUSICBOX, sustain 0) used to silently
 // kill the drone, which made picking a background look broken. The engine
-// queue is FIFO with a single producer, so the sandwich is race-free.
-constexpr int kBgPreset = 1;  // DRONE
-int g_uiPreset = 3;           // what the player's keys currently use
+// Per-note preset events keep this colour independent from the player's
+// global bus/filter preset.
+constexpr int kBgPreset = 1;  // ORGAN
 
 void bgNoteOn(int32_t id, float cents, float vel) {
-  g_engine.setParam(Param::TimbrePreset, (float)kBgPreset);
-  g_engine.noteOnPersistent(id, cents, vel);
-  g_engine.setParam(Param::TimbrePreset, (float)g_uiPreset);
+  g_engine.noteOnPersistentWithPreset(id, cents, vel, kBgPreset);
 }
 
 SympatheticStrings g_strings;  // JI halo around everything (SHIFT+S toggles)
@@ -256,6 +256,7 @@ void aqCallback(void*, AudioQueueRef q, AudioQueueBufferRef buf) {
   g_env.store(envLocal, std::memory_order_relaxed);
   // Sympathetic strings: the dry synth excites the JI halo.
   g_strings.process(samples, samples, frames);
+  g_chorus.process(samples, frames);
   // Generosity layer: everything played joins a fading ambient memory.
   g_echo.process(samples, samples, frames);
   // The manual looper records synth+ambience and adds loop playback on top.
@@ -353,8 +354,9 @@ uint32_t nowMs32() {
           .count());
 }
 
-const char* kPresetNames[kNumTimbrePresets] = {"PURE", "DRONE", "REED",
-                                               "CHIME", "MUSICBOX"};
+const char* kPresetNames[kNumTimbrePresets] = {"PURE", "ORGAN", "REED",
+                                               "CHIME", "MUSICBOX", "WARM",
+                                               "HOLLOW"};
 const float kBaseOctaves[4] = {55.0f, 110.0f, 220.0f, 440.0f};
 
 // JI ladder for toss landings; sign of spin mirrors it downward (utonal).
@@ -430,6 +432,7 @@ void weatherTick(const Ui& ui) {
   g_echo.setLevel(clampf(0.45f + 0.25f * breathe + 0.05f * t1, 0.30f, 0.80f));
   g_echo.setFeedback(
       clampf(0.52f + 0.10f * breathe + 0.05f * t2, 0.40f, 0.68f));
+  g_echo.setRhythmicTap((float)g_pulse.periodSec(), g_pulse.ticking());
   if (ui.wetBase > 0.0f)
     g_reverb.setWet(
         clampf(ui.wetBase * (0.85f + 0.35f * breathe) + 0.03f * t3,
@@ -489,9 +492,7 @@ void pulseTick() {
   if (!beat.play) return;
   const float cents = beat.chordIndex >= 0 ? g_bg[beat.chordIndex].cents : 0.0f;
   // MUSICBOX ends by itself — no note-off bookkeeping
-  g_engine.setParam(Param::TimbrePreset, 4.0f);
-  g_engine.noteOn(1300, cents, beat.velocity);
-  g_engine.setParam(Param::TimbrePreset, (float)g_uiPreset);
+  g_engine.noteOnWithPreset(1300, cents, beat.velocity, 4);
 }
 
 double expDelay(double meanSec) {
@@ -585,12 +586,9 @@ void ghostPhraseTick(const Ui& ui, double now) {
   const int slot = g_ghost.nextSlot++ & 3;
   const int32_t id = kGhostIdBase + slot;
   g_ghost.activeMask |= (1u << slot);
-  g_engine.setParam(Param::EnvAttack, 0.22f);
-  g_engine.noteOn(id,
-                  g_ghostPhrase.phrase.note[i].cents +
-                      g_ghostPhrase.transpose,
-                  g_ghostPhrase.velocity * (i == 0 ? 1.0f : 0.88f));
-  g_engine.setParam(Param::EnvAttack, timbrePreset(ui.preset).attack);
+  g_engine.noteOnWithPreset(
+      id, g_ghostPhrase.phrase.note[i].cents + g_ghostPhrase.transpose,
+      g_ghostPhrase.velocity * (i == 0 ? 1.0f : 0.88f), ui.preset, 0.22f);
   if (g_ghostOffCount < (int)(sizeof g_ghostOffs / sizeof g_ghostOffs[0]))
     g_ghostOffs[g_ghostOffCount++] = {now + hold, id};
 
@@ -632,12 +630,9 @@ void shakePhraseTick(const Ui& ui, double now) {
   const int slot = g_shakeSlot++ & 7;
   const int32_t id = kShakeIdBase + slot;
   g_shakeMask |= (1u << slot);
-  g_engine.setParam(Param::EnvAttack, 0.06f);
-  g_engine.noteOn(id,
-                  g_shakePhrase.phrase.note[i].cents +
-                      g_shakePhrase.transpose,
-                  g_shakePhrase.velocity * (i == 0 ? 1.0f : 0.88f));
-  g_engine.setParam(Param::EnvAttack, timbrePreset(ui.preset).attack);
+  g_engine.noteOnWithPreset(
+      id, g_shakePhrase.phrase.note[i].cents + g_shakePhrase.transpose,
+      g_shakePhrase.velocity * (i == 0 ? 1.0f : 0.88f), ui.preset, 0.06f);
   if (g_shakeOffCount < (int)(sizeof g_shakeOffs / sizeof g_shakeOffs[0]))
     g_shakeOffs[g_shakeOffCount++] = {now + 0.42, id};
 
@@ -953,6 +948,8 @@ int main(int argc, char** argv) {
   g_reverb.setWet(0.35f);
   g_strings.init((float)kSr);
   g_strings.setRootHz(220.0f);
+  g_chorus.init((float)kSr);
+  g_chorus.setDepth(timbrePreset(3).chorusDepth);
 
   // Loop storage lives for the whole run; allocated before audio starts.
   // 8 undo levels: the host has RAM to spare, and a single level felt
@@ -1033,8 +1030,8 @@ int main(int argc, char** argv) {
   Ui ui;
   const bool soulLoaded = soulLoad(ui);
   if (soulLoaded) {
-    g_uiPreset = ui.preset;
     g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
+    g_chorus.setDepth(timbrePreset(ui.preset).chorusDepth);
     applyCenter(ui);  // octave from the soul
   }
   g_weather.start = nowSec();
@@ -1048,9 +1045,8 @@ int main(int argc, char** argv) {
       // it greets you with one of your own notes from last time
       schedule(2.5, [&ui] {
         if (g_playedThisSession || g_garden.count() == 0) return;
-        g_engine.setParam(Param::EnvAttack, 1.0f);
-        g_engine.noteOn(1198, g_garden.freshestCents(), 0.3f);
-        g_engine.setParam(Param::EnvAttack, timbrePreset(ui.preset).attack);
+        g_engine.noteOnWithPreset(1198, g_garden.freshestCents(), 0.3f,
+                                  ui.preset, 1.0f);
         schedule(2.2, [] { g_engine.noteOff(1198); });
       });
     }
@@ -1104,8 +1100,8 @@ int main(int argc, char** argv) {
         backgroundApply();
       } else if (c == '`') {
         ui.preset = (ui.preset + 1) % kNumTimbrePresets;
-        g_uiPreset = ui.preset;
         g_engine.setParam(Param::TimbrePreset, (float)ui.preset);
+        g_chorus.setDepth(timbrePreset(ui.preset).chorusDepth);
       } else if (c == 0x7F || c == 0x08) {  // backspace
         ui.octave = (ui.octave + 1) % 4;
         applyCenter(ui);
@@ -1303,8 +1299,8 @@ int main(int argc, char** argv) {
   soulSave(ui);
   if (g_garden.count() > 0) {
     // goodnight: it hums your last remembered note as it falls asleep
-    g_engine.setParam(Param::EnvAttack, 0.12f);
-    g_engine.noteOn(1199, g_garden.freshestCents(), 0.25f);
+    g_engine.noteOnWithPreset(1199, g_garden.freshestCents(), 0.25f,
+                              ui.preset, 0.12f);
     sleepMs(500);
     g_engine.noteOff(1199);
     sleepMs(300);

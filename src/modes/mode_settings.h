@@ -1,7 +1,8 @@
 // The SETTINGS screen: the only place where keys switch anything. Entered
 // deliberately (a short GO press while playing), so nothing can be broken
-// mid-play. Digits 1-5 cycle: scale, timbre, octave, background preset and scene;
-// GO returns to playing. Entering/exiting also checkpoints the soul (see
+// mid-play. Digits 1-7 cycle: scale, timbre, octave, background preset, scene,
+// glide and the output voicing (internal speaker vs the 3.5 mm jack); GO
+// returns to playing. Entering/exiting also checkpoints the soul (see
 // soul.h), including removal of a custom background by a built-in preset.
 #pragma once
 #include "mode.h"

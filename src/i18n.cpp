@@ -17,7 +17,16 @@ constexpr const char* kText[] = {
     "3 oct.",      // LabelOctave
     "4 bg",        // LabelBackground
     "5 scene",     // LabelScene
+    "6 glide",     // LabelGlide
+    "7 out",       // LabelOutput
     "play!",       // PlayGreeting
+
+    "off",         // GlideOff
+    "soft",        // GlideSoft
+    "strong",      // GlideStrong
+
+    "speaker",     // OutputSpeaker
+    "jack",        // OutputJack
 
     "off",         // BackgroundOff
     "root",        // BackgroundRoot
@@ -25,10 +34,12 @@ constexpr const char* kText[] = {
     "halo",        // BackgroundHalo
 
     "PURE",        // PresetPure
-    "DRONE",       // PresetDrone
+    "ORGAN",       // PresetDrone
     "REED",        // PresetReed
     "CHIME",       // PresetChime
     "MUSICBOX",    // PresetMusicBox
+    "WARM",        // PresetWarm
+    "HOLLOW",      // PresetHollow
 
     "meadow",      // SceneMeadow
     "cosmos",      // SceneCosmos
@@ -53,7 +64,16 @@ constexpr const char* kText[] = {
     "3 okt.",      // LabelOctave
     "4 tlo",       // LabelBackground
     "5 scena",     // LabelScene
+    "6 slizg",     // LabelGlide
+    "7 audio",     // LabelOutput
     "graj!",       // PlayGreeting
+
+    "wyl.",        // GlideOff
+    "lekki",       // GlideSoft
+    "mocny",       // GlideStrong
+
+    "glosnik",     // OutputSpeaker
+    "jack",        // OutputJack
 
     "cisza",       // BackgroundOff
     "fundament",   // BackgroundRoot
@@ -61,10 +81,12 @@ constexpr const char* kText[] = {
     "aureola",     // BackgroundHalo
 
     "CZYSTA",      // PresetPure
-    "DRON",        // PresetDrone
+    "ORGANY",      // PresetDrone
     "STROIK",      // PresetReed
     "DZWONKI",     // PresetChime
     "POZYTYWKA",   // PresetMusicBox
+    "AKSAMIT",     // PresetWarm
+    "FUJARKA",     // PresetHollow
 
     "laka",        // SceneMeadow
     "kosmos",      // SceneCosmos
@@ -92,6 +114,8 @@ constexpr TextId kPresetNames[] = {
     TextId::PresetReed,
     TextId::PresetChime,
     TextId::PresetMusicBox,
+    TextId::PresetWarm,
+    TextId::PresetHollow,
 };
 static_assert(sizeof(kPresetNames) / sizeof(kPresetNames[0]) ==
                   ga::kNumTimbrePresets,
