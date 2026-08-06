@@ -1,7 +1,7 @@
 # grajek
 
 A pocket instrument that **cannot be played badly** — built by a dad for his
-kid, on an **M5Stack Cardputer-ADV** (ESP32-S3, ~$60 off the shelf).
+kid, on an **M5Stack Cardputer-ADV** (ESP32-S3, ~$30 off the shelf).
 
 https://github.com/user-attachments/assets/ff5505d3-2069-4a1e-8fab-654272a3c69c
 
