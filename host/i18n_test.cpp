@@ -16,6 +16,8 @@ int main() {
   assert(strcmp(i18n::tr(i18n::TextId::GlideSoft), "soft") == 0);
   assert(strcmp(i18n::tr(i18n::TextId::GlideStrong), "strong") == 0);
   assert(strcmp(i18n::tr(i18n::TextId::OutputJack), "jack") == 0);
+  assert(strcmp(i18n::tr(i18n::TextId::LabelVolume), "8 vol") == 0);
+  assert(strcmp(i18n::tr(i18n::TextId::VolumeLoud), "loud") == 0);
   assert(strcmp(i18n::scaleName(ga::ScaleId::MAJOR), "MAJOR JI") == 0);
 #else
   assert(strcmp(i18n::tr(i18n::TextId::SettingsTitle), "ustawienia") == 0);
@@ -25,6 +27,8 @@ int main() {
   assert(strcmp(i18n::tr(i18n::TextId::GlideSoft), "lekki") == 0);
   assert(strcmp(i18n::tr(i18n::TextId::GlideStrong), "mocny") == 0);
   assert(strcmp(i18n::tr(i18n::TextId::OutputSpeaker), "glosnik") == 0);
+  assert(strcmp(i18n::tr(i18n::TextId::LabelVolume), "8 glosn.") == 0);
+  assert(strcmp(i18n::tr(i18n::TextId::VolumeLoud), "glosno") == 0);
   assert(strcmp(i18n::scaleName(ga::ScaleId::MAJOR), "DUR JI") == 0);
 #endif
 

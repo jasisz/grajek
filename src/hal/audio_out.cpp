@@ -144,11 +144,13 @@ void speakerVoicingInit(float sr) {
   s_shelfCoef[1] = makeHighShelf(sr, 2500.0f, 0.0f);
 }
 
-// Safety ceiling: a hard cap on the final output (~-5 dBFS after a soft
+// Safety ceiling: a hard cap on the final output (~-2 dBFS after a soft
 // clip). This instrument is for a kid — no combination of layers may ever
-// get loud enough to hurt, on the speaker or on headphones. Kept digital
-// (the ES8311 DAC stays at 0 dB for SNR); raise cautiously if ever needed.
-constexpr float kOutputCeiling = 0.55f;
+// get loud enough to hurt, on the speaker or on headphones. Everyday
+// loudness lives BELOW this cap, in the user volume setting driving the
+// engine's master gain; the ceiling only bounds the worst case. Kept
+// digital (the ES8311 DAC stays at 0 dB for SNR).
+constexpr float kOutputCeiling = 0.8f;
 
 std::atomic<float> s_env{0.0f};
 

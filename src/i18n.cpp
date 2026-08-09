@@ -19,6 +19,7 @@ constexpr const char* kText[] = {
     "5 scene",     // LabelScene
     "6 glide",     // LabelGlide
     "7 out",       // LabelOutput
+    "8 vol",       // LabelVolume
     "play!",       // PlayGreeting
 
     "off",         // GlideOff
@@ -27,6 +28,10 @@ constexpr const char* kText[] = {
 
     "speaker",     // OutputSpeaker
     "jack",        // OutputJack
+
+    "quiet",       // VolumeQuiet
+    "medium",      // VolumeMedium
+    "loud",        // VolumeLoud
 
     "off",         // BackgroundOff
     "root",        // BackgroundRoot
@@ -66,6 +71,7 @@ constexpr const char* kText[] = {
     "5 scena",     // LabelScene
     "6 slizg",     // LabelGlide
     "7 audio",     // LabelOutput
+    "8 glosn.",    // LabelVolume
     "graj!",       // PlayGreeting
 
     "wyl.",        // GlideOff
@@ -74,6 +80,10 @@ constexpr const char* kText[] = {
 
     "glosnik",     // OutputSpeaker
     "jack",        // OutputJack
+
+    "cicho",       // VolumeQuiet
+    "srednio",     // VolumeMedium
+    "glosno",      // VolumeLoud
 
     "cisza",       // BackgroundOff
     "fundament",   // BackgroundRoot

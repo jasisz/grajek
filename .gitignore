@@ -1,5 +1,6 @@
 .pio/
 .venv/
+src/idf_component.yml
 __pycache__/
 host/build/
 host/out/

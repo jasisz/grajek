@@ -101,7 +101,7 @@ src/                ESP32 firmware (PlatformIO / Arduino core 3.x):
   soul.cpp          what survives the power switch (garden/chord/pulse, NVS)
   firefly.cpp       the WS2812 firefly + battery dusk
   i18n.cpp          compile-time LCD text (English default, Polish variant)
-  settings.cpp      scale/timbre/octave/background/scene/glide state, in NVS
+  settings.cpp      scale/timbre/octave/background/scene/glide/output/volume state, in NVS
   main.cpp          main loop; boots straight into playing
 ```
 
@@ -216,8 +216,8 @@ saved NVS format.
 The box **boots straight into playing**: there is no mode picker or setup
 wizard. In INSTRUMENT all 56 keys are music: column = scale step, bottom row =
 the lowest interval, and the digit row follows the keyboard's physical
-one-column stagger. USTAWIENIA is the deliberate exception: digits 1–6 change
-its six rows; every other keyboard key only wakes the box.
+one-column stagger. USTAWIENIA is the deliberate exception: digits 1–8 change
+its eight rows; every other keyboard key only wakes the box.
 
 Everything else hangs off the one side button:
 
@@ -231,15 +231,18 @@ Everything else hangs off the one side button:
 | **tilt toward / away** | depth: the sound moves into the reverb and echo, or comes close and dry |
 | **lay face-down** (after playing) | goodnight: the screen and firefly switch off, then recent remembered phrases replay as a quiet, slowing lullaby — lifting the box, BtnGO or any keyboard key wakes it instantly |
 
-The settings screen (short BtnGO) has six rows, each cycled by its digit
+The settings screen (short BtnGO) has eight rows, each cycled by its digit
 and persisted in NVS: **scale** (ordered happy → strange: pentatonic JI,
 just major, 12-EDO, 19-EDO, 31-EDO, 11-limit Partch, WOLF), **timbre**
 (the five additive colors plus WARM filtered saw and HOLLOW breathing pulse),
 **octave**, **background layer** (off → root → a breathing two-note drone whose
 upper voice moves between fifth and harmonic seventh → a fixed
 root/fifth/harmonic-seventh halo; the Polish labels are *cisza*, *fundament*,
-*dron* and *aureola*), **visualization scene**, and **glide** (off → soft →
-strong). Glide is off by default. SOFT gives quick neighbouring notes in one
+*dron* and *aureola*), **visualization scene**, **glide** (off → soft →
+strong), **output** (speaker / jack), and **volume** (quiet → medium → loud,
+driving the engine's master gain under a fixed digital safety ceiling — even
+LOUD cannot exceed what the box deems safe for a child). Glide is off by
+default. SOFT gives quick neighbouring notes in one
 physical row a short pitch landing; STRONG waits longer between keys, forgives
 much wider leaps and sings the whole way, a deliberate portamento. Simultaneous
 chords and the preceding voice remain polyphonic in both.

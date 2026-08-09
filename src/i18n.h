@@ -21,6 +21,7 @@ enum class TextId : uint8_t {
   LabelScene,
   LabelGlide,
   LabelOutput,
+  LabelVolume,
   PlayGreeting,
 
   GlideOff,
@@ -29,6 +30,10 @@ enum class TextId : uint8_t {
 
   OutputSpeaker,
   OutputJack,
+
+  VolumeQuiet,
+  VolumeMedium,
+  VolumeLoud,
 
   BackgroundOff,
   BackgroundRoot,

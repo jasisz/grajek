@@ -34,6 +34,12 @@ GlideMode glide();
 enum class OutputMode : uint8_t { Speaker = 0, Jack };
 OutputMode output();
 
+// Loudness as a three-step ladder driving the engine's master gain. It sits
+// BELOW the fixed safety ceiling in the output stage: LOUD means "as loud as
+// this box is ever allowed to be", not "unlimited".
+enum class Volume : uint8_t { Quiet = 0, Medium, Loud };
+Volume volume();
+
 const char* presetName(int idx);
 
 // Zmiany cykliczne są natychmiastowe w RAM; NVS dostaje końcowy wybór przy
@@ -45,6 +51,7 @@ void cycleBackground();
 void cycleVizScene();
 void cycleGlide();
 void cycleOutput();
+void cycleVolume();
 
 // wciska aktualny stan w silnik + struny + ambient (po zmianie i na starcie)
 void applyToEngine(ga::Engine& e);

@@ -50,6 +50,10 @@ void ModeSettings::onKey(ModeCtx& ctx, int col, int row, bool down) {
       settings::cycleOutput();
       settings::applyToEngine(ctx.engine);
       break;
+    case 8:
+      settings::cycleVolume();
+      settings::applyToEngine(ctx.engine);
+      break;
     default: return;
   }
   markDirty();
@@ -95,7 +99,7 @@ void ModeSettings::draw(ModeCtx& ctx) {
 
   // krótkie etykiety: przy rozmiarze 2 kolumna wartości startuje na 100 px,
   // a najdłuższa nazwa skali ("JI 11-limit") kończy się dokładnie w kadrze
-  const char* labels[7] = {
+  const char* labels[8] = {
       i18n::tr(i18n::TextId::LabelScale),
       i18n::tr(i18n::TextId::LabelTimbre),
       i18n::tr(i18n::TextId::LabelOctave),
@@ -103,8 +107,9 @@ void ModeSettings::draw(ModeCtx& ctx) {
       i18n::tr(i18n::TextId::LabelScene),
       i18n::tr(i18n::TextId::LabelGlide),
       i18n::tr(i18n::TextId::LabelOutput),
+      i18n::tr(i18n::TextId::LabelVolume),
   };
-  const char* values[7];
+  const char* values[8];
   values[0] = i18n::scaleName(settings::scale());
   values[1] = settings::presetName(settings::preset());
   snprintf(buf, sizeof buf, "%d Hz", (int)settings::baseHz());
@@ -125,16 +130,29 @@ void ModeSettings::draw(ModeCtx& ctx) {
   values[6] = i18n::tr(settings::output() == settings::OutputMode::Jack
                            ? i18n::TextId::OutputJack
                            : i18n::TextId::OutputSpeaker);
+  switch (settings::volume()) {
+    case settings::Volume::Quiet:
+      values[7] = i18n::tr(i18n::TextId::VolumeQuiet);
+      break;
+    case settings::Volume::Loud:
+      values[7] = i18n::tr(i18n::TextId::VolumeLoud);
+      break;
+    default:
+      values[7] = i18n::tr(i18n::TextId::VolumeMedium);
+      break;
+  }
 
-  // Seven rows at the font's own 16 px cell: the last tops at y=118 and ends
-  // at 133, inside the 135 px panel. A tighter pitch would fit too, but each
-  // row paints an opaque background and would eat the descenders above it.
+  // Eight rows no longer fit at the font's own 16 px cell, so the pitch drops
+  // to 14 px: the last row tops at y=118 and ends at 133, inside the 135 px
+  // panel. Overlapping rows may not paint opaque backgrounds (each would eat
+  // the descenders above it) — the sprite is cleared at the top of draw(), so
+  // the text renders transparent instead.
   g.setTextSize(2);
-  for (int i = 0; i < 7; ++i) {
-    const int y = 22 + i * 16;
-    g.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  for (int i = 0; i < 8; ++i) {
+    const int y = 20 + i * 14;
+    g.setTextColor(TFT_LIGHTGREY);
     g.drawString(labels[i], 6, y);
-    g.setTextColor(TFT_WHITE, TFT_BLACK);
+    g.setTextColor(TFT_WHITE);
     g.drawString(values[i], 100, y);
   }
 }

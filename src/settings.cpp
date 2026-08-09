@@ -19,6 +19,11 @@ int s_vizScene = 0;  // nocna łąka
 settings::GlideMode s_glide =
     settings::GlideMode::Off;  // zwykły Grajek ląduje bez ślizgu
 settings::OutputMode s_output = settings::OutputMode::Speaker;
+settings::Volume s_volume = settings::Volume::Medium;
+
+// Master gain per volume step. The steps are ~4 dB apart, and even LOUD
+// leaves headroom under the output stage's safety ceiling.
+const float kVolumeGain[3] = {0.35f, 0.6f, 0.9f};
 
 constexpr uint8_t kDirtyScale = 1u << 0;
 constexpr uint8_t kDirtyPreset = 1u << 1;
@@ -27,6 +32,7 @@ constexpr uint8_t kDirtyBackground = 1u << 3;
 constexpr uint8_t kDirtyScene = 1u << 4;
 constexpr uint8_t kDirtyGlide = 1u << 5;
 constexpr uint8_t kDirtyOutput = 1u << 6;
+constexpr uint8_t kDirtyVolume = 1u << 7;
 uint8_t s_dirty = 0;
 
 }  // namespace
@@ -60,6 +66,9 @@ void load() {
   s_glide = (settings::GlideMode)(stored > 2 ? 0 : stored);
   s_output = p.getUChar("out", 0) ? settings::OutputMode::Jack
                                   : settings::OutputMode::Speaker;
+  const uint8_t vol = p.getUChar("vol", (uint8_t)settings::Volume::Medium);
+  s_volume = (settings::Volume)(vol > 2 ? (uint8_t)settings::Volume::Medium
+                                        : vol);
   p.end();
   s_dirty = background.needsWrite ? kDirtyBackground : 0;
 }
@@ -98,6 +107,9 @@ bool save() {
   if ((s_dirty & kDirtyOutput) &&
       p.putUChar("out", (uint8_t)s_output) == sizeof(uint8_t))
     saved |= kDirtyOutput;
+  if ((s_dirty & kDirtyVolume) &&
+      p.putUChar("vol", (uint8_t)s_volume) == sizeof(uint8_t))
+    saved |= kDirtyVolume;
   p.end();
   if (parked) hal::audioResumeAfterFlash();
   s_dirty &= ~saved;
@@ -143,6 +155,7 @@ void cycleBackground() {
 int vizScene() { return s_vizScene; }
 GlideMode glide() { return s_glide; }
 OutputMode output() { return s_output; }
+Volume volume() { return s_volume; }
 
 void cycleVizScene() {
   s_vizScene = (s_vizScene + 1) % viz::kSceneCount;
@@ -161,6 +174,11 @@ void cycleGlide() {
   s_dirty |= kDirtyGlide;
 }
 
+void cycleVolume() {
+  s_volume = (Volume)(((uint8_t)s_volume + 1) % 3);
+  s_dirty |= kDirtyVolume;
+}
+
 void applyToEngine(ga::Engine& e) {
   const float root = baseHz();
   e.setParam(ga::Param::BaseHz, root);
@@ -172,6 +190,7 @@ void applyToEngine(ga::Engine& e) {
   const bool jack = s_output == OutputMode::Jack;
   hal::setJackVoicing(jack);
   e.setParam(ga::Param::BassVoicing, jack ? 0.0f : 1.0f);
+  e.setParam(ga::Param::MasterGain, kVolumeGain[(uint8_t)s_volume]);
   ambient::setPreset(s_preset);
   // Preserve a soul-restored custom chord on later timbre/octave changes.
   if (ambient::backgroundSelectedPreset() != s_bgPreset)

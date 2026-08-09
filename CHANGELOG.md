@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0] — 2026-08-09
+
+### Added
+- Volume setting: quiet / medium / loud (settings row 8), persisted in NVS.
+  It drives the engine's master gain, so it also scales the background layer
+  and the lullaby.
+
+### Changed
+- The box plays louder. The output safety ceiling rose from -5 dBFS to
+  -2 dBFS, and the default master gain from 0.5 to 0.6 (the new "medium").
+  The ceiling remains a hard cap: no combination of layers or settings can
+  exceed it, on the speaker or on headphones.
+
 ## [0.2.0] — 2026-08-04
 
 ### Added
