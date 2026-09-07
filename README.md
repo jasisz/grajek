@@ -209,7 +209,10 @@ uv pip install --python .venv/bin/python platformio==6.1.19 pip==26.2 pyyaml==6.
 ```
 
 `platformio.ini` pins the pioarduino platform to **55.03.311** so device
-builds use one reproducible Arduino/ESP-IDF toolchain. The display language
+builds use one reproducible Arduino/ESP-IDF toolchain. M5GFX 0.2.26 is pinned to its
+upstream Git commit because that version is unavailable in the PlatformIO
+registry. Pinned display libraries install before M5Cardputer's wildcard
+dependencies. The display language
 is selected only while compiling: `cardputer-adv` is English and
 `cardputer-adv-pl` is Polish. It does not add a language setting or alter the
 saved NVS format.
