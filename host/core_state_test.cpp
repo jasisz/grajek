@@ -40,9 +40,9 @@ void gardenTest() {
   assert(phrase.count == 3);
   assert(phrase.note[1].gapMs == 120 && phrase.note[2].gapMs == 0);
   assert(garden.phraseAtAnchor(&phrase, 4) && phrase.count == 2);
-  assert(gk::Garden::replayGapMs(0) == 70);
+  assert(gk::Garden::replayGapMs(0) == 0);
   assert(gk::Garden::replayGapMs(240) == 240);
-  assert(gk::Garden::replayGapMs(1499) == 1200);
+  assert(gk::Garden::replayGapMs(1499) == 1499);
 
   gk::Garden bounded;
   for (int i = 0; i < 6; ++i) bounded.push((float)i, 1000 + i * 100);
@@ -76,12 +76,12 @@ void gardenTest() {
   restored.push(40.0f, 1234);
   assert(restored.startsPhrase(3));
 
-  const float randomValues[] = {0.0f, 0.80f};
-  RandomSequence random{randomValues, 2};
-  assert(garden.pluck(&phrase, 1.0f, nextRandom, &random));
+  const float randomValues[] = {0.0f};
+  RandomSequence random{randomValues, 1};
+  assert(garden.selectPhrase(&phrase, nextRandom, &random));
   assert(phrase.count == 2);
-  assert(near(phrase.note[0].cents, 1900.0f));
-  assert(near(phrase.note[1].cents, 2100.0f));
+  assert(near(phrase.note[0].cents, 700.0f));
+  assert(near(phrase.note[1].cents, 900.0f));
 }
 
 void pulseTest() {

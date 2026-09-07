@@ -62,7 +62,7 @@ void ModeSettings::onKey(ModeCtx& ctx, int col, int row, bool down) {
 void ModeSettings::tick(ModeCtx&, float dt) {
   const uint32_t nowMs = millis();
   float ghostSource = 0.0f, ghostPlayed = 0.0f;
-  if (ambient::pollGhost(&ghostSource, &ghostPlayed))
+  while (ambient::pollGhost(&ghostSource, &ghostPlayed))
     firefly::ghost(ghostPlayed);  // drain the event outside the play scenes
 
   constexpr float kImuPeriod = 0.02f;

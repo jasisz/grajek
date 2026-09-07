@@ -6,8 +6,8 @@
 // w settings (ekran USTAWIEŃ w menu); przytrzymany GO zmienia barwę w locie.
 //
 // Gesty:
-//   MACHANIE  — wiatr wspomnień: każdy zamach wyrywa z ogrodu krótką frazę
-//               z rytmem dziecka (czasem całą przenosi); siła zamachu =
+//   MACHANIE  — wiatr wspomnień: każdy zamach przywołuje ostatnią frazę
+//               z rytmem, akordami i długościami nut; siła zamachu =
 //               głośność. Klawisze robią nowe frazy, ruch gra stare — nie
 //               konkurują. Pusty ogród: zapasowa drabinka skali.
 //   PRZECHYŁ  — na boki: jasność brzmienia (filtr); do/od siebie: głębia
@@ -34,7 +34,6 @@ class ModeInstrument : public Mode {
  private:
   void imuStep(ModeCtx&);
   void triggerChime(ModeCtx&, float energy, float dir);
-  void playChimeNote(ModeCtx&, float cents, float velocity);
   void windPhraseStep(ModeCtx&, uint32_t nowMs);
   void windPhraseCancel(ModeCtx&);
 

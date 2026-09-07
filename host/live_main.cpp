@@ -61,6 +61,7 @@
 #include "ga_scales.h"
 #include "ga_strings.h"
 #include "gk_garden.h"
+#include "gk_phrase_player.h"
 #include "gk_pulse.h"
 #include "wav_writer.h"
 
@@ -130,43 +131,23 @@ struct Weather {
 };
 Weather g_weather;
 
-// Ghost garden: minutes-scale memory. It keeps short gestures, not a sack of
-// unrelated pitches: phrase boundaries plus the player's inter-onset timing.
+// Ghost garden: minutes-scale memory. It keeps short gestures: boundaries,
+// onset timing, note lengths and velocities.
 // After ~7 s of silence the box quietly re-sows one whole recent phrase. The
 // player's first real key silences the ghosts immediately — it never fights
 // the human.
 using GardenPhrase = gk::GardenPhrase;
 
-struct GardenReplay {
-  GardenPhrase phrase;
-  int pos = 0;
-  double nextAt = 0.0;
-  float transpose = 0.0f;
-  float velocity = 0.0f;
-  bool active = false;
-};
-
-struct GardenNoteOff {
-  double at = 0.0;
-  int32_t id = -1;
-};
-
 struct GhostPlayback {
   double lastInput = 0.0;
   double nextAt = 0.0;
-  uint32_t activeMask = 0;  // which of the 4 ghost ids are sounding
-  int nextSlot = 0;
 };
 gk::Garden g_garden;
 GhostPlayback g_ghost;
-GardenReplay g_ghostPhrase;
-GardenReplay g_shakePhrase;
-GardenNoteOff g_ghostOffs[6];
-GardenNoteOff g_shakeOffs[8];
-int g_ghostOffCount = 0;
-int g_shakeOffCount = 0;
-uint32_t g_shakeMask = 0;
-int g_shakeSlot = 0;
+gk::PhrasePlayer g_ghostPlayer;
+gk::PhrasePlayer g_shakePlayer;
+float g_ghostTranspose = 0.0f;
+float g_ghostVelocity = 0.0f;
 int g_shakeStep = 1;
 constexpr int32_t kGhostIdBase = 1100;
 constexpr int32_t kShakeIdBase = 1120;
@@ -467,18 +448,14 @@ float rnd01f() { return (float)(rand() % 10000) * 0.0001f; }
 
 float hostGardenRandom(void*) { return rnd01f(); }
 
-uint16_t replayGapMs(uint16_t recordedMs) {
-  return gk::Garden::replayGapMs(recordedMs);
-}
-
 bool selectGardenPhrase(GardenPhrase* out) {
   return g_garden.selectPhrase(out, hostGardenRandom, nullptr);
 }
 
-void gardenPush(float cents) {
+void gardenPush(int32_t id, float cents, float velocity) {
   const double now = nowSec();
   g_playedThisSession = true;
-  g_garden.push(cents, nowMs32());
+  g_garden.noteOn(id, cents, nowMs32(), (uint8_t)lroundf(velocity * 100.0f));
   g_ghost.lastInput = now;
 }
 
@@ -499,47 +476,36 @@ double expDelay(double meanSec) {
   return -meanSec * log(1.0 - 0.9999 * (double)rnd01f());
 }
 
-void drainGardenOffs(GardenNoteOff* offs, int& count, int32_t idBase,
-                     int slots, uint32_t& activeMask, double now) {
-  for (int i = 0; i < count;) {
-    if (offs[i].at <= now) {
-      g_engine.noteOff(offs[i].id);
-      const int slot = (int)(offs[i].id - idBase);
-      if (slot >= 0 && slot < slots) activeMask &= ~(1u << slot);
-      offs[i] = offs[--count];
-    } else {
-      ++i;
-    }
-  }
-}
-
-void drainGardenOffs() {
-  const double now = nowSec();
-  drainGardenOffs(g_ghostOffs, g_ghostOffCount, kGhostIdBase, 4,
-                  g_ghost.activeMask, now);
-  drainGardenOffs(g_shakeOffs, g_shakeOffCount, kShakeIdBase, 8,
-                  g_shakeMask, now);
+void cancelPhrase(gk::PhrasePlayer& player, int32_t idBase) {
+  const auto batch = player.cancel();
+  for (int i = 0; i < batch.count; ++i)
+    g_engine.noteOff(idBase + batch.events[i].slot);
 }
 
 void gardenSilenceGhosts() {
-  g_ghostPhrase.active = false;
+  cancelPhrase(g_ghostPlayer, kGhostIdBase);
   g_ghost.nextAt = 0.0;
-  for (int i = 0; i < g_ghostOffCount; ++i)
-    g_engine.noteOff(g_ghostOffs[i].id);
-  g_ghostOffCount = 0;
-  for (int i = 0; i < 4; ++i)
-    if (g_ghost.activeMask & (1u << i)) g_engine.noteOff(kGhostIdBase + i);
-  g_ghost.activeMask = 0;
 }
 
 void gardenSilenceShake() {
-  g_shakePhrase.active = false;
-  for (int i = 0; i < g_shakeOffCount; ++i)
-    g_engine.noteOff(g_shakeOffs[i].id);
-  g_shakeOffCount = 0;
-  for (int i = 0; i < 8; ++i)
-    if (g_shakeMask & (1u << i)) g_engine.noteOff(kShakeIdBase + i);
-  g_shakeMask = 0;
+  if (g_shakePlayer.active()) g_ghost.lastInput = nowSec();
+  cancelPhrase(g_shakePlayer, kShakeIdBase);
+}
+
+void playPhrase(gk::PhrasePlayer& player, int32_t idBase, const Ui& ui,
+                float transpose, float velocity, float maxAttack) {
+  const auto batch = player.tick(nowMs32());
+  for (int i = 0; i < batch.count; ++i) {
+    const auto& event = batch.events[i];
+    const int32_t id = idBase + event.slot;
+    if (!event.down) {
+      g_engine.noteOff(id);
+      continue;
+    }
+    g_engine.noteOnWithPreset(
+        id, event.note.cents + transpose, velocity * event.note.velocity / 90.0f,
+        ui.preset, fminf(maxAttack, event.note.holdMs * 0.00025f));
+  }
 }
 
 void scheduleNextGhost(double now, bool firstAfterSilence) {
@@ -558,60 +524,38 @@ void scheduleNextGhost(double now, bool firstAfterSilence) {
   g_ghost.nextAt = target;
 }
 
-void ghostPhraseStart(double now) {
+void ghostPhraseStart() {
   GardenPhrase phrase;
   if (!selectGardenPhrase(&phrase)) return;
   gardenSilenceGhosts();
-  g_ghostPhrase.phrase = phrase;
-  g_ghostPhrase.pos = 0;
-  g_ghostPhrase.nextAt = now;
-  g_ghostPhrase.velocity = 0.25f + 0.11f * rnd01f();
+  g_ghostPlayer.start(phrase, nowMs32());
+  g_ghostVelocity = 0.25f + 0.11f * rnd01f();
   const float r = rnd01f();
-  if (r < 0.75f) g_ghostPhrase.transpose = 0.0f;
-  else if (r < 0.84f) g_ghostPhrase.transpose = 1200.0f;
-  else if (r < 0.92f) g_ghostPhrase.transpose = 702.0f;
-  else g_ghostPhrase.transpose = -498.0f;
-  g_ghostPhrase.active = true;
+  if (r < 0.75f) g_ghostTranspose = 0.0f;
+  else if (r < 0.84f) g_ghostTranspose = 1200.0f;
+  else if (r < 0.92f) g_ghostTranspose = 702.0f;
+  else g_ghostTranspose = -498.0f;
   printf("\n  ~ duch-fraza: %d nut, przesuniecie %+.0f c\n", phrase.count,
-         (double)g_ghostPhrase.transpose);
+         (double)g_ghostTranspose);
 }
 
 void ghostPhraseTick(const Ui& ui, double now) {
-  if (!g_ghostPhrase.active || now < g_ghostPhrase.nextAt) return;
-  const int i = g_ghostPhrase.pos;
-  const bool more = i + 1 < g_ghostPhrase.phrase.count;
-  const uint16_t nextGap =
-      more ? replayGapMs(g_ghostPhrase.phrase.note[i + 1].gapMs) : 0;
-  const double hold = more ? std::min(1.0, (nextGap + 180) * 0.001) : 1.4;
-  const int slot = g_ghost.nextSlot++ & 3;
-  const int32_t id = kGhostIdBase + slot;
-  g_ghost.activeMask |= (1u << slot);
-  g_engine.noteOnWithPreset(
-      id, g_ghostPhrase.phrase.note[i].cents + g_ghostPhrase.transpose,
-      g_ghostPhrase.velocity * (i == 0 ? 1.0f : 0.88f), ui.preset, 0.22f);
-  if (g_ghostOffCount < (int)(sizeof g_ghostOffs / sizeof g_ghostOffs[0]))
-    g_ghostOffs[g_ghostOffCount++] = {now + hold, id};
-
-  ++g_ghostPhrase.pos;
-  if (more) {
-    g_ghostPhrase.nextAt = now + nextGap * 0.001;
-  } else {
-    g_ghostPhrase.active = false;
-    scheduleNextGhost(now, false);
-  }
+  playPhrase(g_ghostPlayer, kGhostIdBase, ui, g_ghostTranspose, g_ghostVelocity, 0.22f);
+  if (!g_ghostPlayer.active()) scheduleNextGhost(now, false);
 }
 
 void gardenTick(const Ui& ui) {
-  if (!g_playedThisSession) return;  // ghosts continue sessions, never start them
+  // Ghosts continue sessions, and wait while the player owns the foreground.
+  if (!g_playedThisSession || g_garden.holding() || g_shakePlayer.active()) return;
   const double now = nowSec();
   if (now - g_ghost.lastInput < kGhostIdleSec || g_garden.count() == 0) {
-    if (g_ghostPhrase.active || g_ghost.activeMask || g_ghostOffCount)
+    if (g_ghostPlayer.active())
       gardenSilenceGhosts();
     else
       g_ghost.nextAt = 0.0;
     return;
   }
-  if (g_ghostPhrase.active) {
+  if (g_ghostPlayer.active()) {
     ghostPhraseTick(ui, now);
     return;
   }
@@ -620,42 +564,26 @@ void gardenTick(const Ui& ui) {
     return;
   }
   if (now < g_ghost.nextAt) return;
-  ghostPhraseStart(now);
+  ghostPhraseStart();
   ghostPhraseTick(ui, now);
 }
 
 void shakePhraseTick(const Ui& ui, double now) {
-  if (!g_shakePhrase.active || now < g_shakePhrase.nextAt) return;
-  const int i = g_shakePhrase.pos;
-  const int slot = g_shakeSlot++ & 7;
-  const int32_t id = kShakeIdBase + slot;
-  g_shakeMask |= (1u << slot);
-  g_engine.noteOnWithPreset(
-      id, g_shakePhrase.phrase.note[i].cents + g_shakePhrase.transpose,
-      g_shakePhrase.velocity * (i == 0 ? 1.0f : 0.88f), ui.preset, 0.06f);
-  if (g_shakeOffCount < (int)(sizeof g_shakeOffs / sizeof g_shakeOffs[0]))
-    g_shakeOffs[g_shakeOffCount++] = {now + 0.42, id};
-
-  ++g_shakePhrase.pos;
-  if (g_shakePhrase.pos >= g_shakePhrase.phrase.count) {
-    g_shakePhrase.active = false;
-  } else {
-    const uint16_t gap =
-        replayGapMs(g_shakePhrase.phrase.note[g_shakePhrase.pos].gapMs);
-    g_shakePhrase.nextAt = now + gap * 0.001;
-  }
+  if (!g_shakePlayer.active()) return;
+  playPhrase(g_shakePlayer, kShakeIdBase, ui, 0.0f, 0.70f, 0.06f);
+  if (!g_shakePlayer.active()) g_ghost.lastInput = now;
 }
 
 void gardenShake(const Ui& ui, float dir) {
+  if (g_shakePlayer.active() || g_garden.holding()) return;
   const double now = nowSec();
   g_playedThisSession = true;
   g_ghost.lastInput = now;
   gardenSilenceGhosts();
-  if (g_shakePhrase.active) return;  // let the remembered sentence finish
-  gardenSilenceShake();              // release the previous sentence's tail
 
   GardenPhrase phrase;
-  if (!g_garden.pluck(&phrase, dir, hostGardenRandom, nullptr)) {
+  g_garden.releaseAll(nowMs32());
+  if (!g_garden.latestPhrase(&phrase)) {
     const int hi = 2 * scaleStepsPerOctave((ScaleId)ui.scale);
     g_shakeStep += dir >= 0.0f ? 1 : -1;
     g_shakeStep = std::max(1, std::min(g_shakeStep, hi - 1));
@@ -663,14 +591,8 @@ void gardenShake(const Ui& ui, float dir) {
     phrase.note[0] = {
         scaleStepCents((ScaleId)ui.scale, g_shakeStep), 0};
   }
-  g_shakePhrase.phrase = phrase;
-  g_shakePhrase.pos = 0;
-  g_shakePhrase.nextAt = now;
-  g_shakePhrase.transpose = 0.0f;  // gk::Garden::pluck already seasoned it
-  g_shakePhrase.velocity = 0.70f;
-  g_shakePhrase.active = true;
-  printf("\n  >> wiatr wspomnien: %d nut, kierunek %s\n", phrase.count,
-         dir >= 0.0f ? "w gore" : "w dol");
+  g_shakePlayer.start(phrase, nowMs32());
+  printf("\n  >> twoja ostatnia fraza: %d nut\n", phrase.count);
   shakePhraseTick(ui, now);
 }
 
@@ -724,6 +646,7 @@ void printStatus(const Ui& ui) {
 void allOff() {
   gardenSilenceGhosts();
   gardenSilenceShake();
+  g_garden.releaseAll(nowMs32());
   g_engine.allNotesOff();
   for (auto& n : g_notes) n = NoteState{};
 }
@@ -746,7 +669,7 @@ void soulSave(const Ui& ui) {
     fprintf(stderr, "Nie moge zapisac tymczasowej duszy.\n");
     return;
   }
-  bool ok = fprintf(f, "grajek-soul 2\n") >= 0;
+  bool ok = fprintf(f, "grajek-soul 3\n") >= 0;
   ok = fprintf(f, "scale %d preset %d octave %d wet %.3f\n", ui.scale,
                ui.preset, ui.octave, (double)ui.wetBase) >= 0 && ok;
   ok = fprintf(f, "bg %d %d", g_bgCustom ? 1 : 0, g_bgCount) >= 0 && ok;
@@ -757,6 +680,8 @@ void soulSave(const Ui& ui) {
     ok = fprintf(f, " %.2f %u %d", (double)g_garden.cents(i),
                  (unsigned)g_garden.delayMs(i),
                  g_garden.startsPhrase(i) ? 1 : 0) >= 0 && ok;
+    ok = fprintf(f, " %u %u", (unsigned)g_garden.holdMs(i),
+                 (unsigned)g_garden.velocity(i)) >= 0 && ok;
   }
   ok = fprintf(f, "\n") >= 0 && ok;
   ok = fflush(f) == 0 && ok;
@@ -778,10 +703,12 @@ bool soulLoad(Ui& ui) {
   BgNote loadedBg[4] = {};
   float loadedGardenCents[gk::kGardenCapacity] = {};
   uint16_t loadedGardenDelay[gk::kGardenCapacity] = {};
+  uint16_t loadedGardenHold[gk::kGardenCapacity] = {};
+  uint8_t loadedGardenVelocity[gk::kGardenCapacity] = {};
   uint32_t loadedPhraseStartMask = 0;
   int loadedGardenCount = 0;
   if (fscanf(f, "%31s %d", tag, &ver) == 2 &&
-      strcmp(tag, "grajek-soul") == 0 && ver == 2 &&
+      strcmp(tag, "grajek-soul") == 0 && (ver == 2 || ver == 3) &&
       fscanf(f, " scale %d preset %d octave %d wet %f", &scale, &preset,
              &octave, &wet) == 4 &&
       fscanf(f, " bg %d %d", &bgCustom, &bgCount) == 2 &&
@@ -803,9 +730,15 @@ bool soulLoad(Ui& ui) {
       unsigned gap = 0;
       int starts = 0;
       gardenOk = fscanf(f, " %f %u %d", &cents, &gap, &starts) == 3 &&
-                 std::isfinite(cents) && gap <= 1499 &&
+                 std::isfinite(cents) && gap <= (ver == 2 ? 1499u : 5000u) &&
                  (starts == 0 || starts == 1) && (i != 0 || starts == 1);
+      unsigned hold = 420, velocity = 90;
+      if (gardenOk && ver == 3)
+        gardenOk = fscanf(f, " %u %u", &hold, &velocity) == 2 &&
+                   hold >= 20 && hold <= 5000 && velocity > 0 && velocity <= 100;
       if (gardenOk) {
+        loadedGardenHold[i] = (uint16_t)hold;
+        loadedGardenVelocity[i] = (uint8_t)velocity;
         const bool phraseStart = starts != 0;
         loadedGardenCents[i] = cents;
         loadedGardenDelay[i] = phraseStart ? (uint16_t)0 : (uint16_t)gap;
@@ -830,7 +763,8 @@ bool soulLoad(Ui& ui) {
     g_bgNextId = bgCount;
     g_bgCustom = bgCustom != 0;
     g_garden.restore(loadedGardenCents, loadedGardenDelay,
-                     loadedPhraseStartMask, loadedGardenCount);
+                     loadedPhraseStartMask, loadedGardenCount,
+                     loadedGardenHold, loadedGardenVelocity);
   }
   return ok;
 }
@@ -1238,13 +1172,14 @@ int main(int argc, char** argv) {
         const float hCents = gridToCents((ScaleId)ui.scale, kp.col, hRow);
         if (ui.latch) {
           if (st.on) {
+            g_garden.noteOff(id, nowMs32());
             g_engine.noteOff(id);
             g_engine.noteOff(id + 64);
             st = NoteState{};
           } else {
             g_engine.noteOn(id, cents, vel);
             if (g_harmony) g_engine.noteOn(id + 64, hCents, vel * 0.45f);
-            gardenPush(cents);
+            gardenPush(id, cents, vel);
             pulseOnOnset();
             st.on = true;
             st.latched = true;
@@ -1254,7 +1189,7 @@ int main(int argc, char** argv) {
           g_engine.noteOn(id, cents, vel);
           if (g_harmony) g_engine.noteOn(id + 64, hCents, vel * 0.45f);
           if (!st.on) {
-            gardenPush(cents);  // remember presses, not auto-repeats
+            gardenPush(id, cents, vel);  // remember presses, not auto-repeats
             pulseOnOnset();
           }
           st.on = true;
@@ -1268,7 +1203,6 @@ int main(int argc, char** argv) {
 
     if (g_sim.inFlight) flightUpdate(ui);
     runPending();
-    drainGardenOffs();
     weatherTick(ui);
     shakePhraseTick(ui, nowSec());
     gardenTick(ui);
@@ -1285,6 +1219,7 @@ int main(int argc, char** argv) {
     const double t = nowSec();
     for (int id = 0; id < 64; ++id) {
       if (g_notes[id].on && !g_notes[id].latched && g_notes[id].offAt <= t) {
+        g_garden.noteOff(id, nowMs32());
         g_engine.noteOff(id);
         g_engine.noteOff(id + 64);  // the harmonic shadow follows
         g_notes[id].on = false;
@@ -1296,6 +1231,7 @@ int main(int argc, char** argv) {
 
   gardenSilenceGhosts();
   gardenSilenceShake();
+  g_garden.releaseAll(nowMs32());
   soulSave(ui);
   if (g_garden.count() > 0) {
     // goodnight: it hums your last remembered note as it falls asleep

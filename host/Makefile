@@ -13,6 +13,7 @@ ENGINE_CPP := $(ENGINE)/ga_dsp.cpp \
               $(ENGINE)/ga_looper.cpp \
               $(ENGINE)/ga_reverb.cpp
 CORE_CPP := $(CORE)/gk_garden.cpp \
+            $(CORE)/gk_phrase_player.cpp \
             $(CORE)/gk_pulse.cpp \
             $(CORE)/gk_lullaby.cpp \
             $(CORE)/gk_background.cpp
@@ -25,12 +26,14 @@ all: $(BUILD)/grajek_host live
 
 test: $(BUILD)/face_down_gesture_test $(BUILD)/idle_sleep_test \
 	$(BUILD)/core_state_test \
+	$(BUILD)/memory_performance_test \
 	$(BUILD)/echo_tape_test $(BUILD)/chorus_test \
 	$(BUILD)/audio_engine_test \
 	$(BUILD)/scale_registry_test $(BUILD)/i18n_pl_test $(BUILD)/i18n_en_test
 	./$(BUILD)/face_down_gesture_test
 	./$(BUILD)/idle_sleep_test
 	./$(BUILD)/core_state_test
+	./$(BUILD)/memory_performance_test
 	./$(BUILD)/echo_tape_test
 	./$(BUILD)/chorus_test
 	./$(BUILD)/audio_engine_test
@@ -50,6 +53,10 @@ $(BUILD)/idle_sleep_test: idle_sleep_test.cpp $(APP)/modes/idle_sleep.h \
 $(BUILD)/core_state_test: core_state_test.cpp $(CORE_CPP) $(HDR)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) core_state_test.cpp $(CORE_CPP) -o $@
+
+$(BUILD)/memory_performance_test: memory_performance_test.cpp $(CORE_CPP) $(HDR)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) memory_performance_test.cpp $(CORE_CPP) -o $@
 
 $(BUILD)/echo_tape_test: echo_tape_test.cpp $(ENGINE)/ga_echo.h \
 		$(ENGINE)/ga_dsp.h

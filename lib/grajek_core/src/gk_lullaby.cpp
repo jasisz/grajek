@@ -52,6 +52,12 @@ LullabyEvent LullabySequencer::tick(uint32_t nowMs, const Garden& garden) {
     gap = garden.startsPhrase(index_ + 1)
               ? 1400
               : Garden::replayGapMs(garden.delayMs(index_ + 1));
+  // Bedtime deliberately tells the contour with one soft voice. Unlike the
+  // daytime polyphonic recall, chords unfold slowly enough to be audible.
+  if (more && !garden.startsPhrase(index_ + 1)) {
+    if (gap < 70) gap = 70;
+    if (gap > 1200) gap = 1200;
+  }
   gap = static_cast<uint32_t>(static_cast<float>(gap) * slowdown_);
 
   event.type = LullabyEventType::PlayNote;

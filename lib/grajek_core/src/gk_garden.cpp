@@ -21,7 +21,7 @@ void Garden::clear() { *this = Garden{}; }
 void Garden::push(float noteCents, uint32_t nowMs) {
   const uint32_t gap = haveLiveOnset_ ? nowMs - lastOnsetMs_ : 0;
   const bool starts =
-      !haveLiveOnset_ || gap >= kPhraseBreakMs ||
+      !haveLiveOnset_ || (!holding() && nowMs - lastActivityMs_ >= kPhraseBreakMs) ||
       captureNotes_ >= kGardenPhraseMax ||
       nowMs - captureStartedMs_ >= kPhraseMaxDurationMs;
   const uint16_t storedGap = starts ? 0 : static_cast<uint16_t>(gap);
@@ -43,11 +43,46 @@ void Garden::push(float noteCents, uint32_t nowMs) {
     ++captureNotes_;
   }
   lastOnsetMs_ = nowMs;
+  lastActivityMs_ = nowMs;
   haveLiveOnset_ = true;
 }
 
+void Garden::noteOn(int32_t id, float noteCents, uint32_t nowMs,
+                    uint8_t noteVelocity) {
+  if (id < 0) return;
+  noteOff(id, nowMs);  // retrigger closes only this key's preceding capture
+  push(noteCents, nowMs);
+  Memory& note = ring_[(head_ + kGardenCapacity - 1) % kGardenCapacity];
+  note.keyId = id;
+  note.onsetMs = nowMs;
+  note.velocity = noteVelocity > 100 ? 100 : (noteVelocity == 0 ? 1 : noteVelocity);
+}
+
+void Garden::noteOff(int32_t id, uint32_t nowMs) {
+  if (id < 0) return;
+  for (auto& note : ring_) {
+    if (note.keyId != id) continue;
+    note.holdMs = replayHoldMs(nowMs - note.onsetMs);
+    note.keyId = -1;
+    lastActivityMs_ = nowMs;
+  }
+}
+
+void Garden::releaseAll(uint32_t nowMs) {
+  for (auto& note : ring_)
+    if (note.keyId >= 0) noteOff(note.keyId, nowMs);
+  haveLiveOnset_ = false;
+}
+
+bool Garden::holding() const {
+  for (const auto& note : ring_)
+    if (note.keyId >= 0) return true;
+  return false;
+}
+
 void Garden::restore(const float* restoredCents, const uint16_t* restoredDelay,
-                     uint32_t phraseStartMask, int restoredCount) {
+                     uint32_t phraseStartMask, int restoredCount,
+                     const uint16_t* restoredHold, const uint8_t* restoredVelocity) {
   clear();
   if (restoredCount < 0) restoredCount = 0;
   if (restoredCount > kGardenCapacity) restoredCount = kGardenCapacity;
@@ -55,8 +90,13 @@ void Garden::restore(const float* restoredCents, const uint16_t* restoredDelay,
 
   for (int i = 0; i < restoredCount; ++i) {
     const bool starts = i == 0 || (phraseStartMask & (1u << i));
+    const uint16_t gap = restoredDelay[i] > 5000 ? 5000 : restoredDelay[i];
     ring_[i] = {restoredCents[i],
-                starts ? static_cast<uint16_t>(0) : restoredDelay[i], starts};
+                starts ? static_cast<uint16_t>(0) : gap, starts};
+    if (restoredHold) ring_[i].holdMs = replayHoldMs(restoredHold[i]);
+    if (restoredVelocity)
+      ring_[i].velocity = restoredVelocity[i] > 100 ? 100 :
+                          (restoredVelocity[i] == 0 ? 1 : restoredVelocity[i]);
   }
   head_ = restoredCount % kGardenCapacity;
   count_ = restoredCount;
@@ -85,6 +125,14 @@ uint16_t Garden::delayMs(int oldestIndex) const {
   return memoryAt(oldestIndex).gapMs;
 }
 
+uint16_t Garden::holdMs(int oldestIndex) const {
+  return oldestIndex >= 0 && oldestIndex < count_ ? memoryAt(oldestIndex).holdMs : 420;
+}
+
+uint8_t Garden::velocity(int oldestIndex) const {
+  return oldestIndex >= 0 && oldestIndex < count_ ? memoryAt(oldestIndex).velocity : 90;
+}
+
 bool Garden::startsPhrase(int oldestIndex) const {
   if (oldestIndex < 0 || oldestIndex >= count_) return false;
   return oldestIndex == 0 || memoryAt(oldestIndex).phraseStart;
@@ -95,9 +143,16 @@ float Garden::freshestCents() const {
 }
 
 uint16_t Garden::replayGapMs(uint16_t recordedMs) {
-  if (recordedMs < 70) return 70;
-  if (recordedMs > 1200) return 1200;
+  // One keyboard scan is one chord, including small I2C/loop timing skew.
+  if (recordedMs < 24) return 0;
+  if (recordedMs > 5000) return 5000;
   return recordedMs;
+}
+
+uint16_t Garden::replayHoldMs(uint32_t recordedMs) {
+  if (recordedMs < 20) return 20;
+  if (recordedMs > 5000) return 5000;
+  return static_cast<uint16_t>(recordedMs);
 }
 
 bool Garden::phraseAtAnchor(GardenPhrase* out, int anchor) const {
@@ -121,7 +176,8 @@ bool Garden::phraseAtAnchor(GardenPhrase* out, int anchor) const {
   for (int i = 0; i < noteCount; ++i) {
     const Memory& memory = memoryAt(window + i);
     out->note[i] = {memory.cents,
-                    i == 0 ? static_cast<uint16_t>(0) : memory.gapMs};
+                    i == 0 ? static_cast<uint16_t>(0) : memory.gapMs,
+                    memory.holdMs, memory.velocity};
   }
   return noteCount > 0;
 }
@@ -147,17 +203,8 @@ bool Garden::selectPhrase(GardenPhrase* out, Random01Fn random01,
   return out->count > 0;
 }
 
-bool Garden::pluck(GardenPhrase* out, float direction, Random01Fn random01,
-                   void* randomContext) const {
-  if (!selectPhrase(out, random01, randomContext)) return false;
-  const float value = nextRandom(random01, randomContext);
-  float transpose = 0.0f;
-  if (value >= 0.78f)
-    transpose = direction >= 0.0f
-                    ? (value < 0.92f ? 1200.0f : 702.0f)
-                    : (value < 0.92f ? -498.0f : -1200.0f);
-  for (int i = 0; i < out->count; ++i) out->note[i].cents += transpose;
-  return true;
+bool Garden::latestPhrase(GardenPhrase* out) const {
+  return phraseAtAnchor(out, count_ - 1);
 }
 
 }  // namespace gk

@@ -42,23 +42,31 @@ void notePresence();
 // the musical event. Deferred NVS writes wait until every key is released.
 void keyState(int id, bool down);
 // A really played note. Notes close in time are captured as one phrase;
-// silence, six notes or ~5 s closes it. This includes sung notes.
-void gardenPush(float cents);
-// Wind: one swing plucks a whole short phrase (fresh phrases more often).
-// One coherent transposition is chosen for the phrase; dir steers it up/down.
+// silence, six notes or ~5 s closes it. Releases preserve articulation.
+void gardenPush(int32_t id, float cents);
+void gardenRelease(int32_t id);
+void gardenReleaseAll();
+bool keysHeld();
+// Protect the entire recalled phrase and its release from ghosts/flash saves.
+void memoryPlaying(bool playing);
+// Wind: one swing recalls the latest phrase, unchanged in pitch and rhythm.
 // false = garden still empty.
-bool gardenPluck(GardenPhrase* phrase, float dir);
+bool gardenRecall(GardenPhrase* phrase);
 // read-only view of the memory ring for the visualization (seed replanting
 // after a scene reset); index 0 = oldest remembered note
 int gardenCount();
 int gardenPhraseCount();
 float gardenCents(int idxOldest);
 uint16_t gardenDelayMs(int idxOldest);
+uint16_t gardenHoldMs(int idxOldest);
+uint8_t gardenVelocity(int idxOldest);
 bool gardenStartsPhrase(int idxOldest);
 // Soul: restore the flattened phrase ring from NVS. Restored memories do NOT
 // count as playing — ghosts continue sessions, they never start them.
 void gardenRestore(const float* cents, const uint16_t* delayMs,
-                   uint32_t phraseStartMask, int n);
+                   uint32_t phraseStartMask, int n,
+                   const uint16_t* holdMs = nullptr,
+                   const uint8_t* velocity = nullptr);
 // soul: one remembered note a few seconds after waking, unless the child
 // starts playing first. Power-on is the human act that earns the greeting.
 void scheduleGreeting();

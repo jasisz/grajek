@@ -38,14 +38,13 @@ the design laws that survived the process:
    your settings and short phrases with their timing — then greets you on the
    next boot with one remembered note.
 
-The gestures on top: **shake** the box and it rattles the child's own
-remembered phrases — a swing releases one short musical thought with the
-captured timing kept inside gentle playback-safe bounds; waving direction
-steers the occasional whole-phrase transposition up or down, and swing energy
-sets the loudness; **tilt** it and everything darkens or brightens (slow and
-smooth, like turning the box away from the light); **lay it face-down** after
-playing and the remembered garden sings itself to sleep — and if it is simply
-left alone for a few minutes, it reaches the same bedtime by itself.
+The gestures on top: **shake** the box to play back the **latest phrase you
+just taught it**, with its rhythm, chord onsets and individual note lengths.
+Repeat the gesture and the same melody returns; a stronger swing plays it
+louder. The phrase finishes its held notes before accepting another swing,
+and a real key takes over immediately. An empty garden still answers with
+one safe note. **Tilt** changes brightness and depth, and **lay it face-down**
+after playing to let the remembered garden sing itself to sleep.
 
 ## Status
 
@@ -57,7 +56,7 @@ left alone for a few minutes, it reaches the same bedtime by itself.
   settings screen behind BtnGO, rather than a mode menu. Also on the device:
   the **heart** (tempo entrainment — a PLL on your key
   presses), the **soul** (the memory garden and pulse are saved at natural
-  pauses; the garden keeps phrase boundaries and timing, while the box still
+  pauses; the garden keeps phrase boundaries, timing and note lengths, while the box still
   greets you with one remembered note), a
   **WS2812 firefly** that flashes in the color of foreground notes and dims
   with the battery, the **goodnight lullaby** (lay it face-down, or just stop
@@ -68,7 +67,7 @@ left alone for a few minutes, it reaches the same bedtime by itself.
   scales.
 - The synthesis presets and releases, stuck-note queue safety, chorus, echo,
   the inactivity timer that ends the day on its own,
-  shared garden, pulse, lullaby and background-preset models, both LCD
+  shared garden, polyphonic phrase playback, snapshot migration, pulse, lullaby and background-preset models, both LCD
   languages, scale registry and the hardware-independent face-down dwell and
   idle timer have host tests. The English and Polish firmware images are also verified with
   separate end-to-end PlatformIO builds.
@@ -86,7 +85,7 @@ lib/grajek_audio/   synthesis engine — pure C++17, ZERO hardware dependencies
                      lock-free event queue; the same code runs on the ESP32
                      and on a laptop)
 lib/grajek_core/    pure state models shared by device and host: phrase garden,
-                    pulse entrainment, goodnight sequencer, background presets
+                    polyphonic phrase playback, pulse entrainment, goodnight sequencer, background presets
 host/               PC targets for shaping the sound without flashing
 web/                ESP Web Tools installer published with each tagged release
 tools/              deterministic release/Pages packaging
@@ -130,12 +129,16 @@ key-up events, so a note fades 0.6 s after the last press or auto-repeat.
 | `SHIFT+E` / `SHIFT+V` | echo on/off / reverb dry → subtle → default → cathedral |
 | `SHIFT+T` / `SHIFT+S` | background on/off / sympathetic strings on/off |
 | `SHIFT+D`, then grid keys | pick a custom background chord (toggle up to 4 notes); `SHIFT+D` accepts it |
-| `SHIFT+,` / `SHIFT+.` | shake one remembered phrase down / up |
+| `SHIFT+,` / `SHIFT+.` | recall the latest phrase (either key; direction only affects the empty-garden fallback) |
 | `SHIFT+W` | start/stop the final-mix recorder; writes `session_<timestamp>.wav` |
 | `ENTER` / `ESC` | panic + re-center (the loop keeps running) / quit |
 
 The live rig restores its scale, timbre, octave, room, custom background and
 phrase garden from `host/grajek_soul.txt` (created when you quit normally).
+The terminal still estimates releases from its 0.6 s timeout or latch toggle;
+those durations and the host’s note velocities now survive in the garden.
+Existing version-2 files load with a default 420 ms hold and are saved as
+version 3 on exit.
 
 **Toss simulator** (a laptop-only toy — on the device the throw gave way to
 the shake-rattle gesture): `SPACE` throws the whole music into a rising
@@ -226,7 +229,7 @@ Everything else hangs off the one side button:
 | any key while playing | plays (column = scale step, bottom row = lowest) |
 | **short BtnGO** | toggles playing ⇄ settings screen |
 | **hold BtnGO while playing** | next timbre (repeats every 0.7 s, the name flashes) |
-| **shake** | the *wind of memories* — when no replay is active, a swing starts one short remembered phrase with bounded captured timing; an empty garden answers with one safe note, and waving direction steers an occasional whole-phrase transposition up or down |
+| **shake** | recalls the latest phrase with its rhythm, chords and note lengths; stronger swings play louder; held keys and an unfinished recall take priority |
 | **tilt sideways** | brightness: darkens or opens the sound (filter) |
 | **tilt toward / away** | depth: the sound moves into the reverb and echo, or comes close and dry |
 | **lay face-down** (after playing) | goodnight: the screen and firefly switch off, then recent remembered phrases replay as a quiet, slowing lullaby — lifting the box, BtnGO or any keyboard key wakes it instantly |
@@ -247,11 +250,22 @@ physical row a short pitch landing; STRONG waits longer between keys, forgives
 much wider leaps and sings the whole way, a deliberate portamento. Simultaneous
 chords and the preceding voice remain polyphonic in both.
 
-Two design laws are enforced here rather than explained: the shake plays
-*remembered phrases* instead of a scale, so the keyboard and the gesture
-feed each other instead of competing; and both tilts are computed from a
-low-passed gravity vector and smoothed over ~0.4 s, so shaking the box never
-jerks the filter and a child's unsteady hands do not wobble the sound.
+The memory holds 32 notes in phrases of up to six notes, split after 1.5 s
+of silence or about five seconds of capture. Holding a key is not silence.
+Note lengths are bounded to 20 ms–5 s; onsets less than 24 ms apart replay as
+a chord. Short attacks keep quick articulations audible. The current timbre
+still colours the recalled phrase; switching timbre does not erase it.
+Daytime ghosts also retain the captured lengths and chords, while bedtime
+keeps its deliberately slow, single-voice retelling.
+
+Device snapshots now include note lengths and velocities. Older snapshots
+remain readable, with a 420 ms hold for notes whose release was never recorded.
+Use the normal source upload to retain NVS; the browser’s complete factory
+image still clears settings and memories as described above.
+
+Both tilts are computed from a low-passed gravity vector and smoothed over
+~0.4 s, so shaking the box does not jerk the filter. This first memory step
+preserves the recorded tempo; tilt continues to control brightness and depth.
 
 ### The screen: five worlds, one music
 

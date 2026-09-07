@@ -5,6 +5,7 @@
 
 #include "ga_dsp.h"
 #include "gk_lullaby.h"
+#include "gk_phrase_player.h"
 #include "hal/audio_out.h"
 
 namespace {
@@ -30,14 +31,11 @@ gk::Garden s_garden;
 uint32_t s_lastInputMs = 0;
 uint32_t s_nextGhostMs = 0;
 bool s_nextGhostPending = false;
-uint32_t s_ghostMask = 0;
-int s_ghostSlot = 0;
-ambient::GardenPhrase s_ghostPhrase;
-int s_ghostPhrasePos = 0;
-uint32_t s_ghostPhraseNextMs = 0;
+gk::PhrasePlayer s_ghostPlayer;
 float s_ghostPhraseTranspose = 0.0f;
 float s_ghostPhraseVel = 0.0f;
-bool s_ghostPhraseActive = false;
+bool s_greetingActive = false;
+uint32_t s_greetingOffMs = 0;
 // ghosts continue sessions, they never start them: no sowing until a real
 // human act this session (a restored garden alone must stay silent)
 bool s_played = false;
@@ -46,28 +44,30 @@ bool s_greetPending = false;
 uint32_t s_autosaveAtMs = 0;
 bool s_autosavePending = false;
 uint64_t s_keysHeld = 0;
+bool s_memoryPlaying = false;
 ambient::SaveRequest s_saveRequest = ambient::SaveRequest::None;
 ambient::BeatGrid s_beatGrid;
 
 // --- goodnight lullaby ---
 gk::LullabySequencer s_lullaby;
 constexpr int32_t kGhostIdBase = 1100;
-constexpr int32_t kLullabyVoiceId = 1104;
+constexpr int32_t kLullabyVoiceId = 1110;
 // 7 s ciszy wystarczy — przy 12 s pamięć pudełka była praktycznie
 // niesłyszalna w normalnej zabawie (dziecko nie robi tak długich pauz)
 constexpr uint32_t kGhostIdleMs = 7000;
-struct PendingOff { uint32_t atMs; int32_t id; };
-PendingOff s_pending[6];
-int s_pendingCount = 0;
-
 int s_uiPreset = 3;           // what the player's keys currently use
 constexpr int kBgPreset = 1;  // the background always speaks ORGAN
 
 // okno dla wizualizacji
 float s_breathe = 1.0f;
-float s_lastGhostSourceCents = 0.0f;
-float s_lastGhostPlayedCents = 0.0f;
-bool s_ghostEvent = false;
+struct GhostVisual { float source; float played; };
+GhostVisual s_ghostEvents[gk::kGardenPhraseMax];
+int s_ghostEventCount = 0;
+
+void showGhost(float source, float played) {
+  if (s_ghostEventCount < gk::kGardenPhraseMax)
+    s_ghostEvents[s_ghostEventCount++] = {source, played};
+}
 
 uint32_t s_rng = 1;
 float rnd01() {
@@ -82,10 +82,6 @@ uint32_t expDelayMs(float meanMs) {
 }
 
 float gardenRandom(void*) { return rnd01(); }
-
-uint32_t replayGapMs(uint16_t recordedMs) {
-  return gk::Garden::replayGapMs(recordedMs);
-}
 
 bool selectPhrase(ambient::GardenPhrase* out) {
   return s_garden.selectPhrase(out, gardenRandom, nullptr);
@@ -187,34 +183,21 @@ void weatherTick(uint32_t nowMs) {
 }
 
 void ghostSilenceAll() {
-  s_ghostPhraseActive = false;
+  const auto batch = s_ghostPlayer.cancel();
+  for (int i = 0; i < batch.count; ++i)
+    s_engine->noteOff(kGhostIdBase + batch.events[i].slot);
+  if (s_greetingActive) s_engine->noteOff(kGhostIdBase);
+  s_greetingActive = false;
   s_nextGhostPending = false;
-  s_ghostEvent = false;
-  // Pending note-offs carry reusable ids. Clear them together with the notes
-  // so an old timer can never cut a later phrase that reused the same slot.
-  for (int i = 0; i < s_pendingCount; ++i) s_engine->noteOff(s_pending[i].id);
-  s_pendingCount = 0;
+  s_ghostEventCount = 0;
   s_engine->noteOff(kLullabyVoiceId);
-  if (!s_ghostMask) return;
-  for (int i = 0; i < 4; ++i)
-    if (s_ghostMask & (1u << i)) s_engine->noteOff(kGhostIdBase + i);
-  s_ghostMask = 0;
 }
 
-// one ghost voice: per-event soft attack + scheduled note-off + viz event
-void ghostPlay(float sourceCents, float playedCents, float vel, float attack,
-               uint32_t nowMs, uint32_t holdMs) {
-  const int slot = s_ghostSlot++ & 3;
-  const int32_t id = kGhostIdBase + slot;
-  s_ghostMask |= (1u << slot);
-  // The attack belongs to this event. A full queue can no longer accept a
-  // temporary global change and lose its restore, leaving later keys slow.
-  s_engine->noteOnWithPreset(id, playedCents, vel, s_uiPreset, attack);
-  s_lastGhostSourceCents = sourceCents;
-  s_lastGhostPlayedCents = playedCents;
-  s_ghostEvent = true;
-  if (s_pendingCount < 6)
-    s_pending[s_pendingCount++] = {nowMs + holdMs, id};
+void greetingPlay(float cents, uint32_t nowMs) {
+  s_engine->noteOnWithPreset(kGhostIdBase, cents, 0.30f, s_uiPreset, 0.65f);
+  showGhost(cents, cents);
+  s_greetingActive = true;
+  s_greetingOffMs = nowMs + 2200;
 }
 
 // The lullaby is one storyteller, not a growing chord. Reusing one id keeps
@@ -225,24 +208,13 @@ void lullabyPlay(float cents, float vel) {
   // PURE plus a long attack leaves the remembered contour intact, but takes
   // the hard edge off CHIME/MUSICBOX and lets it disappear into the room.
   s_engine->noteOnWithPreset(kLullabyVoiceId, cents, vel, 0, 0.72f);
-  s_lastGhostSourceCents = cents;
-  s_lastGhostPlayedCents = cents;
-  s_ghostEvent = true;
+  showGhost(cents, cents);
 }
 
-// scheduled ghost note-offs — drained ALWAYS (also during the lullaby and
-// the sleep after it; starving these once left ghost chords humming all
-// night through the "real silence")
 void drainGhostOffs(uint32_t nowMs) {
-  for (int i = 0; i < s_pendingCount;) {
-    if ((int32_t)(nowMs - s_pending[i].atMs) >= 0) {
-      s_engine->noteOff(s_pending[i].id);
-      const int slot = (int)(s_pending[i].id - kGhostIdBase);
-      if (slot >= 0 && slot < 4) s_ghostMask &= ~(1u << slot);
-      s_pending[i] = s_pending[--s_pendingCount];
-    } else {
-      ++i;
-    }
+  if (s_greetingActive && (int32_t)(nowMs - s_greetingOffMs) >= 0) {
+    s_engine->noteOff(kGhostIdBase);
+    s_greetingActive = false;
   }
 }
 
@@ -250,9 +222,7 @@ void startGhostPhrase(uint32_t nowMs) {
   ambient::GardenPhrase phrase;
   if (!selectPhrase(&phrase)) return;
   ghostSilenceAll();
-  s_ghostPhrase = phrase;
-  s_ghostPhrasePos = 0;
-  s_ghostPhraseNextMs = nowMs;
+  s_ghostPlayer.start(phrase, nowMs);
   s_ghostPhraseVel = 0.25f + 0.11f * rnd01();
   const float r = rnd01();
   // Phrase contour is law: if seasoned, every note moves by the same amount.
@@ -260,29 +230,24 @@ void startGhostPhrase(uint32_t nowMs) {
   else if (r < 0.84f) s_ghostPhraseTranspose = 1200.0f;
   else if (r < 0.92f) s_ghostPhraseTranspose = 702.0f;
   else s_ghostPhraseTranspose = -498.0f;
-  s_ghostPhraseActive = true;
 }
 
 void ghostPhraseTick(uint32_t nowMs) {
-  if (!s_ghostPhraseActive ||
-      (int32_t)(nowMs - s_ghostPhraseNextMs) < 0) return;
-  const int i = s_ghostPhrasePos;
-  const float source = s_ghostPhrase.note[i].cents;
-  const float played = source + s_ghostPhraseTranspose;
-  const bool more = i + 1 < s_ghostPhrase.count;
-  const uint32_t nextGap =
-      more ? replayGapMs(s_ghostPhrase.note[i + 1].gapMs) : 0;
-  const uint32_t hold =
-      more ? (nextGap + 180 < 1000 ? nextGap + 180 : 1000) : 1400;
-  ghostPlay(source, played, s_ghostPhraseVel * (i == 0 ? 1.0f : 0.88f),
-            0.22f, nowMs, hold);
-  ++s_ghostPhrasePos;
-  if (more) {
-    s_ghostPhraseNextMs = nowMs + nextGap;
-  } else {
-    s_ghostPhraseActive = false;
-    scheduleNextGhost(nowMs, false);
+  const auto batch = s_ghostPlayer.tick(nowMs);
+  for (int i = 0; i < batch.count; ++i) {
+    const auto& event = batch.events[i];
+    const int32_t id = kGhostIdBase + event.slot;
+    if (!event.down) {
+      s_engine->noteOff(id);
+      continue;
+    }
+    const float played = event.note.cents + s_ghostPhraseTranspose;
+    const float vel = s_ghostPhraseVel * event.note.velocity / 90.0f;
+    const float attack = fminf(0.22f, event.note.holdMs * 0.00025f);
+    s_engine->noteOnWithPreset(id, played, vel, s_uiPreset, attack);
+    showGhost(event.note.cents, played);
   }
+  if (!s_ghostPlayer.active()) scheduleNextGhost(nowMs, false);
 }
 
 void gardenTick(uint32_t nowMs) {
@@ -291,19 +256,18 @@ void gardenTick(uint32_t nowMs) {
     s_greetPending = false;
     if (!s_played && s_garden.count() > 0) {
       const float freshest = s_garden.freshestCents();
-      ghostPlay(freshest, freshest, 0.30f, 0.65f, nowMs, 2200);
+      greetingPlay(freshest, nowMs);
     }
   }
 
   if (!s_played || nowMs - s_lastInputMs < kGhostIdleMs ||
       s_garden.count() == 0) {
-    if (s_ghostPhraseActive) ghostSilenceAll();
+    if (s_ghostPlayer.active()) ghostSilenceAll();
     s_nextGhostPending = false;
     return;
   }
-  if (s_ghostPhraseActive) {
-    // At most one note per main-loop pass, so the single viz event cannot be
-    // overwritten even for a recorded chord with a zero inter-onset gap.
+  if (s_ghostPlayer.active()) {
+    // Chord notes share a batch; the visual queue preserves every seed.
     ghostPhraseTick(nowMs);
     return;
   }
@@ -360,15 +324,20 @@ void tick(const BeatGrid& beatGrid) {
   weatherTick(now);
   drainGhostOffs(now);  // in every state — ghosts must always ring out
   if (s_saveRequest != SaveRequest::None) return;
-  if (s_autosavePending && s_keysHeld == 0 && !s_lullaby.active() &&
+  if (s_autosavePending && s_keysHeld == 0 && !s_memoryPlaying &&
+      !s_ghostPlayer.active() && !s_lullaby.active() &&
       (int32_t)(now - s_autosaveAtMs) >= 0) {
-    // The soul is one 152-byte atomic blob now: one commit, five seconds
+    // The soul is one atomic blob: one commit, five seconds
     // after the last captured note and before the first ghost at seven.
     s_saveRequest = SaveRequest::Soul;
     return;  // main saves before any ghost can begin in this pass
   }
-  if (!s_lullaby.active()) gardenTick(now);  // the lullaby owns the night
-  else lullabyTick(now);
+  if (!s_lullaby.active()) {
+    if (!s_memoryPlaying && (s_keysHeld == 0 || s_ghostPlayer.active()))
+      gardenTick(now);
+  } else {
+    lullabyTick(now);
+  }
 }
 
 SaveRequest saveRequest() { return s_saveRequest; }
@@ -393,6 +362,7 @@ void saveFinished(SaveRequest request, bool success) {
 bool lullabyStart() {
   // only after real play this session, only with something to sing
   if (!s_lullaby.start(millis(), s_played, s_garden)) return false;
+  s_garden.releaseAll(millis());
   // Let the released daytime drone fade before the first remembered phrase;
   // otherwise its two tails stack under the opening and sound twice as big.
   // Do not let the first note arrive through the daytime-bright filter. The
@@ -422,9 +392,8 @@ bool lullabyActive() { return s_lullaby.active(); }
 void notePresence() {
   const uint32_t now = millis();
   s_lastInputMs = now;
-  // A wind replay can last a little over six seconds. If a five-second soul
-  // snapshot from the preceding key phrase is still pending, move it beyond
-  // the whole gesture so flash parking never cuts a remembered sentence.
+  // Defer pending saves on presence. memoryPlaying additionally protects the
+  // whole recall, including long held notes, until its final release.
   if (s_autosavePending) s_autosaveAtMs = now + 7000;
   s_played = true;
   s_greetPending = false;  // the child is already here — no greeting needed
@@ -446,9 +415,24 @@ void keyState(int id, bool down) {
   }
 }
 
-void gardenPush(float cents) {
+bool keysHeld() { return s_keysHeld != 0; }
+
+void memoryPlaying(bool playing) {
+  if (s_memoryPlaying == playing) return;
+  s_memoryPlaying = playing;
+  if (!playing) {
+    s_lastInputMs = millis();
+    if (s_autosavePending) s_autosaveAtMs = millis() + 5000;
+  }
+}
+
+void gardenReleaseAll() { s_garden.releaseAll(millis()); }
+
+void gardenRelease(int32_t id) { s_garden.noteOff(id, millis()); }
+
+void gardenPush(int32_t id, float cents) {
   const uint32_t now = millis();
-  s_garden.push(cents, now);
+  s_garden.noteOn(id, cents, now);
   s_lastInputMs = now;
   s_autosaveAtMs = now + 5000;
   s_autosavePending = true;
@@ -459,8 +443,11 @@ void gardenPush(float cents) {
   ghostSilenceAll();
 }
 
-bool gardenPluck(GardenPhrase* phrase, float dir) {
-  return s_garden.pluck(phrase, dir, gardenRandom, nullptr);
+bool gardenRecall(GardenPhrase* phrase) {
+  // Recalling ends the teaching gesture: the next key starts a new phrase,
+  // even if a short recall finished before the normal silence boundary.
+  s_garden.releaseAll(millis());
+  return s_garden.latestPhrase(phrase);
 }
 
 int gardenCount() { return s_garden.count(); }
@@ -473,13 +460,17 @@ uint16_t gardenDelayMs(int idxOldest) {
   return s_garden.delayMs(idxOldest);
 }
 
+uint16_t gardenHoldMs(int idxOldest) { return s_garden.holdMs(idxOldest); }
+uint8_t gardenVelocity(int idxOldest) { return s_garden.velocity(idxOldest); }
+
 bool gardenStartsPhrase(int idxOldest) {
   return s_garden.startsPhrase(idxOldest);
 }
 
 void gardenRestore(const float* cents, const uint16_t* delayMs,
-                   uint32_t phraseStartMask, int n) {
-  s_garden.restore(cents, delayMs, phraseStartMask, n);
+                   uint32_t phraseStartMask, int n,
+                   const uint16_t* holdMs, const uint8_t* velocity) {
+  s_garden.restore(cents, delayMs, phraseStartMask, n, holdMs, velocity);
   // deliberately NOT s_played — a restored garden waits for a human act
 }
 
@@ -569,10 +560,13 @@ float backgroundNoteCents(int i) {
 }
 
 bool pollGhost(float* sourceCents, float* playedCents) {
-  if (!s_ghostEvent) return false;
-  s_ghostEvent = false;
-  if (sourceCents) *sourceCents = s_lastGhostSourceCents;
-  if (playedCents) *playedCents = s_lastGhostPlayedCents;
+  if (s_ghostEventCount == 0) return false;
+  const GhostVisual event = s_ghostEvents[0];
+  for (int i = 1; i < s_ghostEventCount; ++i)
+    s_ghostEvents[i - 1] = s_ghostEvents[i];
+  --s_ghostEventCount;
+  if (sourceCents) *sourceCents = event.source;
+  if (playedCents) *playedCents = event.played;
   return true;
 }
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- A shake recalls the latest phrase consistently, without random pitch shifts.
+  Swing energy still controls loudness; real keys interrupt the recall.
+- Phrase memory captures key-down durations and velocities. Daytime replays
+  preserve chords and overlapping notes, and finish held notes before accepting
+  another swing. Firmware and laptop share one bounded polyphonic player.
+- Device snapshots upgrade from V1 to V2; laptop soul files from V2 to V3.
+  Old phrases retain their pitches and rhythm with a default 420 ms hold.
+- Saves and autonomous ghosts wait until an explicit recall has finished.
+
+### Tests
+- Capture/release timing, chord playback, repeatable recall, cancellation,
+  delayed ticks, clock wrap, ring overwrite and device snapshot migration.
+
 ## [0.3.0] — 2026-08-09
 
 ### Added
