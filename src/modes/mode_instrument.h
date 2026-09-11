@@ -3,7 +3,7 @@
 // Wszystkie 56 klawiszy gra, w każdym wieku — zero specjalnych klawiszy,
 // dziecko nie ma czego się bać. Kolumna = stopień skali, dolny rząd =
 // najniższy interwał (geometria w ga_scales.h). Skala/barwa/oktawa mieszkają
-// w settings (ekran USTAWIEŃ w menu); przytrzymany GO zmienia barwę w locie.
+// w settings (ekran USTAWIEŃ w menu); krótki GO zmienia świat, przytrzymany otwiera ustawienia.
 //
 // Gesty:
 //   MACHANIE  — wiatr wspomnień: każdy zamach przywołuje ostatnią frazę
@@ -27,7 +27,7 @@ class ModeInstrument : public Mode {
   void enter(ModeCtx&) override;
   void exit(ModeCtx&) override;
   void onKey(ModeCtx&, int col, int row, bool down) override;
-  void onGoHold(ModeCtx&) override;  // przytrzymany GO = następna barwa
+  void nextWorld(ModeCtx&);  // short GO; full settings live behind a hold
   void tick(ModeCtx&, float dt) override;
   void draw(ModeCtx&) override;
 

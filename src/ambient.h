@@ -9,6 +9,7 @@
 #include "ga_engine.h"
 #include "gk_background.h"
 #include "gk_garden.h"
+#include "gk_worlds.h"
 
 namespace ambient {
 
@@ -35,6 +36,10 @@ void tick(const BeatGrid& beatGrid);  // call once per main-loop pass
 // natural quiet point; main performs the actual NVS writes and reports back.
 SaveRequest saveRequest();
 void saveFinished(SaveRequest request, bool success);
+// Manual edits/world changes are saved together at a quiet point, including
+// when no musical note was played. They do not earn autonomous ghost playback.
+void settingsChanged();
+void setWorld(gk::WorldId world);
 
 // presence: any human key press pauses ghost sowing and bows out ghosts
 void notePresence();
@@ -81,7 +86,7 @@ void lullabyAbort();   // lifted / played: wake now
 bool lullabyActive();  // Singing or the sleeping silence after
 
 // Background presets are a fixed descriptor registry: silence, root, the
-// breathing fifth drone (default), and a three-note harmonic-seventh halo.
+// breathing fifth drone, and a three-note harmonic-seventh halo.
 // Custom-chord hooks remain for alternate controllers and old soul snapshots.
 void backgroundToggleNote(float cents);
 void backgroundSetPreset(gk::BackgroundId preset);

@@ -94,6 +94,7 @@ void ModeSettings::draw(ModeCtx& ctx) {
   g.setTextColor(TFT_ORANGE, TFT_BLACK);
   g.drawString(i18n::tr(i18n::TextId::SettingsTitle), 6, 4);
   g.setTextSize(1);
+  g.drawString(i18n::worldName(settings::world()), 132, 4);
   g.setTextColor(TFT_DARKGREY, TFT_BLACK);
   g.drawString(i18n::tr(i18n::TextId::GoPlay), 172, 12);
 

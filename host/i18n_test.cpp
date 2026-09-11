@@ -9,6 +9,9 @@ int main() {
   assert(i18n::tr(i18n::TextId::Count)[0] == '\0');
 
 #if defined(GRAJEK_LANG_EN)
+  assert(strcmp(i18n::worldName(gk::WorldId::Meadow), "meadow") == 0);
+  assert(strcmp(i18n::worldName(gk::WorldId::Cosmos), "cosmos") == 0);
+  assert(strcmp(i18n::worldName(gk::WorldId::Fireworks), "fireworks") == 0);
   assert(strcmp(i18n::tr(i18n::TextId::SettingsTitle), "settings") == 0);
   assert(strcmp(i18n::backgroundName(gk::BackgroundId::Off), "off") == 0);
   assert(strcmp(i18n::presetName(4), "MUSICBOX") == 0);
@@ -20,6 +23,9 @@ int main() {
   assert(strcmp(i18n::tr(i18n::TextId::VolumeLoud), "loud") == 0);
   assert(strcmp(i18n::scaleName(ga::ScaleId::MAJOR), "MAJOR JI") == 0);
 #else
+  assert(strcmp(i18n::worldName(gk::WorldId::Meadow), "laka") == 0);
+  assert(strcmp(i18n::worldName(gk::WorldId::Cosmos), "kosmos") == 0);
+  assert(strcmp(i18n::worldName(gk::WorldId::Fireworks), "ognie") == 0);
   assert(strcmp(i18n::tr(i18n::TextId::SettingsTitle), "ustawienia") == 0);
   assert(strcmp(i18n::backgroundName(gk::BackgroundId::Off), "cisza") == 0);
   assert(strcmp(i18n::presetName(4), "POZYTYWKA") == 0);
@@ -31,6 +37,7 @@ int main() {
   assert(strcmp(i18n::tr(i18n::TextId::VolumeLoud), "glosno") == 0);
   assert(strcmp(i18n::scaleName(ga::ScaleId::MAJOR), "DUR JI") == 0);
 #endif
+  assert(strcmp(i18n::worldName(gk::WorldId::Mandala), "mandala") == 0);
 
   assert(strcmp(i18n::scaleName(static_cast<ga::ScaleId>(255)), "12-EDO") ==
          0);

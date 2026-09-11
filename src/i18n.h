@@ -3,6 +3,7 @@
 // choice at compile time means there is no language state, NVS key or runtime
 // branch.
 #pragma once
+#include "gk_worlds.h"
 
 #include <stdint.h>
 
@@ -10,6 +11,7 @@
 #include "gk_background.h"
 
 namespace i18n {
+const char* worldName(gk::WorldId id);
 
 enum class TextId : uint8_t {
   SettingsTitle,

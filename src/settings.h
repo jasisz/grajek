@@ -1,7 +1,7 @@
 // Wspólny stan muzyczny: skala, barwa, oktawa, tło, scena i opcjonalny ślizg.
 // Jedno źródło prawdy — czyta go INSTRUMENT, zmienia USTAWIENIA i GO.
 //
-// Bez trybów wieku: stan domyślny (pentatonika + CHIME) jest bezpieczny dla
+// Bez trybów wieku: domyślna łąka (pentatonika + POZYTYWKA) jest bezpieczna dla
 // malucha, a głębsze skale są po prostu dalej w cyklu — od wesołych do
 // dziwnych. Odkrywanie zamiast konfiguracji. Wybory trwają w NVS.
 #pragma once
@@ -9,11 +9,15 @@
 #include "ga_scales.h"
 #include "ga_voice.h"
 #include "gk_background.h"
+#include "gk_worlds.h"
 
 namespace settings {
 
 void load();  // raz w setup(), przed applyToEngine
 bool save();  // zapisuje tylko pola zmienione od ostatniego zapisu/odczytu
+gk::WorldId world();
+const gk::WorldSound& worldSound();
+void cycleWorld();
 
 ga::ScaleId scale();
 int preset();        // indeks barwy (kNumTimbrePresets)
@@ -43,7 +47,7 @@ Volume volume();
 const char* presetName(int idx);
 
 // Zmiany cykliczne są natychmiastowe w RAM; NVS dostaje końcowy wybór przy
-// wyjściu z ustawień / puszczeniu długiego GO, nie każdy krok karuzeli.
+// wyjściu z ustawień albo w naturalnej pauzie, nie każdy krok karuzeli.
 void cycleScale();
 void cyclePreset();
 void cycleOctave();

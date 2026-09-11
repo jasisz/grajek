@@ -26,6 +26,8 @@ uint32_t s_weatherLastMs = 0;
 int s_fifthVariant = 0;  // 0 = 3/2, 1 = 7/4 (default background only)
 float s_cutoffBase = 7500.0f;
 float s_spaceBase = 0.5f;  // przechył do/od siebie: głębia przestrzeni
+gk::WorldId s_world = gk::WorldId::Meadow;
+gk::WorldSound s_worldSound = gk::worldSound(gk::WorldId::Meadow);
 
 gk::Garden s_garden;
 uint32_t s_lastInputMs = 0;
@@ -43,6 +45,7 @@ uint32_t s_greetAtMs = 0;
 bool s_greetPending = false;
 uint32_t s_autosaveAtMs = 0;
 bool s_autosavePending = false;
+bool s_settingsSavePending = false;
 uint64_t s_keysHeld = 0;
 bool s_memoryPlaying = false;
 ambient::SaveRequest s_saveRequest = ambient::SaveRequest::None;
@@ -146,6 +149,17 @@ void weatherTick(uint32_t nowMs) {
   const float breathe = ga::clampf(1.0f - (env - 0.04f) / 0.18f, 0.0f, 1.0f);
   s_breathe = breathe;
 
+  // Ease into the world's room and tape at UI rate; no extra sample-rate DSP.
+  const auto& target = gk::worldSound(s_world);
+  constexpr float follow = 0.08f;  // ~0.4 s at the weather's 30 Hz rate
+  s_worldSound.echoLevelScale += follow * (target.echoLevelScale - s_worldSound.echoLevelScale);
+  s_worldSound.echoFeedback += follow * (target.echoFeedback - s_worldSound.echoFeedback);
+  s_worldSound.reverbLevelScale += follow * (target.reverbLevelScale - s_worldSound.reverbLevelScale);
+  s_worldSound.room += follow * (target.room - s_worldSound.room);
+  s_worldSound.damp += follow * (target.damp - s_worldSound.damp);
+  hal::reverb().setRoom(s_worldSound.room);
+  hal::reverb().setDamp(s_worldSound.damp);
+
   // głębia z przechyłu do/od siebie: mnożnik na echo i pogłos pogody
   const float space = 0.5f + s_spaceBase;  // 0.5..1.5, neutralnie 1.0
   if (hal::echoAvailable()) {
@@ -155,12 +169,15 @@ void weatherTick(uint32_t nowMs) {
     hal::echo().setRhythmicTap((float)s_beatGrid.periodSec,
                               s_beatGrid.ticking);
     hal::echo().setLevel(ga::clampf(
-        (0.45f + 0.25f * breathe + 0.05f * t1) * space, 0.15f, 0.90f));
+        (0.45f + 0.25f * breathe + 0.05f * t1) * space *
+            s_worldSound.echoLevelScale, 0.04f, 0.90f));
     hal::echo().setFeedback(
-        ga::clampf(0.52f + 0.10f * breathe + 0.05f * t2, 0.40f, 0.68f));
+        ga::clampf(s_worldSound.echoFeedback + 0.10f * breathe + 0.05f * t2,
+                   0.10f, 0.68f));
   }
   hal::reverb().setWet(ga::clampf(
-      (0.30f * (0.85f + 0.35f * breathe) + 0.03f * t3) * space, 0.06f, 0.70f));
+      (0.30f * (0.85f + 0.35f * breathe) + 0.03f * t3) * space *
+          s_worldSound.reverbLevelScale, 0.03f, 0.70f));
   const float ratio = (0.95f + 0.15f * t3) * (1.0f - 0.07f * breathe);
   s_engine->setParam(ga::Param::FilterCutoffHz,
                      ga::clampf(s_cutoffBase * ratio, 300.0f, 12000.0f));
@@ -329,7 +346,7 @@ void tick(const BeatGrid& beatGrid) {
       (int32_t)(now - s_autosaveAtMs) >= 0) {
     // The soul is one atomic blob: one commit, five seconds
     // after the last captured note and before the first ghost at seven.
-    s_saveRequest = SaveRequest::Soul;
+    s_saveRequest = s_settingsSavePending ? SaveRequest::SoulAndSettings : SaveRequest::Soul;
     return;  // main saves before any ghost can begin in this pass
   }
   if (!s_lullaby.active()) {
@@ -345,19 +362,35 @@ SaveRequest saveRequest() { return s_saveRequest; }
 void saveFinished(SaveRequest request, bool success) {
   if (request == SaveRequest::None || request != s_saveRequest) return;
   const uint32_t now = millis();
-  if (request == SaveRequest::Soul) {
+  if (request == SaveRequest::Soul || !s_lullaby.active()) {
     if (success) {
       s_autosavePending = false;
+      s_settingsSavePending = false;
     } else {
       s_autosaveAtMs = now + 30000;
       s_autosavePending = true;
     }
   } else {
-    if (success) s_autosavePending = false;
+    if (success) {
+      s_autosavePending = false;
+      s_settingsSavePending = false;
+    }
     s_lullaby.acknowledgeSave(success, now);
   }
   s_saveRequest = SaveRequest::None;
 }
+
+void settingsChanged() {
+  const uint32_t now = millis();
+  s_settingsSavePending = true;
+  s_autosavePending = true;
+  s_autosaveAtMs = now + 5000;
+  s_lastInputMs = now;
+  s_greetPending = false;
+  if (s_engine) ghostSilenceAll();
+}
+
+void setWorld(gk::WorldId world) { s_world = world; }
 
 bool lullabyStart() {
   // only after real play this session, only with something to sing

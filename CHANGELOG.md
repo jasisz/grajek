@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+- Five musical worlds: meadow (plucked tines), ocean (breathing pulse and
+  gentle tilt bend), cosmos (resonant bells), fireworks (warm synth) and mandala
+  (slow organ), each with its own scene, background, glide and ambience profile.
+- Short GO cycles worlds; a 0.7 s hold opens all eight settings. GO returns from
+  settings to playing. Holds do not repeat, and waking never changes worlds.
+- Each world remembers its manual edits; output and volume remain global.
+  Legacy settings migrate into the matching world. The phrase garden is shared.
+- Fireworks adds a springy warm synth and mandala a slow organ; meadow is a
+  little drier, ocean darker and cosmos more spacious. Existing three-world
+  saves expand without losing manual settings.
+- Host coverage for GO gestures, world recall, NVS migration and failed saves.
+
 ### Changed
 - A shake recalls the latest phrase consistently, without random pitch shifts.
   Swing energy still controls loudness; real keys interrupt the recall.

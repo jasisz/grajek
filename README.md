@@ -31,7 +31,7 @@ the design laws that survived the process:
    loop on your key presses); pause and it lets go.
 4. **Discovery instead of configuration.** While playing, every grid key is
    music — there are no special keys among the playing keys. The default world
-   (pentatonic + chimes) is safe for a toddler; deeper scales simply sit
+   (pentatonic + plucked tines) is safe for a toddler; deeper scales simply sit
    further down the settings list, ordered happy-to-strange, waiting for an
    older kid to find them. No age switch, no parent manual.
 5. **Memory is the soul.** At natural pauses it saves what you taught it —
@@ -53,7 +53,8 @@ after playing to let the remembered garden sing itself to sleep.
 - **Device firmware**: plays on real hardware — the whole chain is ported
   (engine → strings → chorus → lo-fi tape → reverb, ambient brain, IMU gestures)
   with five visualization scenes. It boots directly into play and has one
-  settings screen behind BtnGO, rather than a mode menu. Also on the device:
+  settings screen behind a held BtnGO; short clicks cycle five musical worlds.
+  Also on the device:
   the **heart** (tempo entrainment — a PLL on your key
   presses), the **soul** (the memory garden and pulse are saved at natural
   pauses; the garden keeps phrase boundaries, timing and note lengths, while the box still
@@ -230,14 +231,15 @@ Everything else hangs off the one side button:
 | Gesture | What it does |
 |---|---|
 | any key while playing | plays (column = scale step, bottom row = lowest) |
-| **short BtnGO** | toggles playing ⇄ settings screen |
-| **hold BtnGO while playing** | next timbre (repeats every 0.7 s, the name flashes) |
+| **short BtnGO while playing** | next musical world: meadow → ocean → cosmos → fireworks → mandala; its name flashes |
+| **hold BtnGO (~0.7 s)** | opens full settings once; releasing does not also change worlds |
+| **BtnGO in settings** | returns to playing (short click or hold) |
 | **shake** | recalls the latest phrase with its rhythm, chords and note lengths; stronger swings play louder; held keys and an unfinished recall take priority |
 | **tilt sideways** | brightness: darkens or opens the sound (filter) |
 | **tilt toward / away** | depth: the sound moves into the reverb and echo, or comes close and dry |
 | **lay face-down** (after playing) | goodnight: the screen and firefly switch off, then recent remembered phrases replay as a quiet, slowing lullaby — lifting the box, BtnGO or any keyboard key wakes it instantly |
 
-The settings screen (short BtnGO) has eight rows, each cycled by its digit
+The settings screen (hold BtnGO) has eight rows, each cycled by its digit
 and persisted in NVS: **scale** (ordered happy → strange: pentatonic JI,
 just major, 12-EDO, 19-EDO, 31-EDO, 11-limit Partch, WOLF), **timbre**
 (the five additive colors plus WARM filtered saw and HOLLOW breathing pulse),
@@ -247,8 +249,8 @@ root/fifth/harmonic-seventh halo; the Polish labels are *cisza*, *fundament*,
 *dron* and *aureola*), **visualization scene**, **glide** (off → soft →
 strong), **output** (speaker / jack), and **volume** (quiet → medium → loud,
 driving the engine's master gain under a fixed digital safety ceiling — even
-LOUD cannot exceed what the box deems safe for a child). Glide is off by
-default. SOFT gives quick neighbouring notes in one
+LOUD cannot exceed what the box deems safe for a child). Glide starts off in
+the meadow, strong in the ocean and soft in the cosmos. SOFT gives quick neighbouring notes in one
 physical row a short pitch landing; STRONG waits longer between keys, forgives
 much wider leaps and sings the whole way, a deliberate portamento. Simultaneous
 chords and the preceding voice remain polyphonic in both.
@@ -270,7 +272,36 @@ Both tilts are computed from a low-passed gravity vector and smoothed over
 ~0.4 s, so shaking the box does not jerk the filter. This first memory step
 preserves the recorded tempo; tilt continues to control brightness and depth.
 
-### The screen: five worlds, one music
+### Five musical worlds, full settings underneath
+
+A short GO click changes sound and image together:
+
+| World | Starting sound | Motion and space |
+|---|---|---|
+| meadow | MUSICBOX plucked tines, no background drone | no glide; quiet, short-lived echo and a small room |
+| ocean | HOLLOW breathing pulse over a two-note drone | strong glide; sideways tilt also bends pitch gently; softer, wider room |
+| cosmos | CHIME bells over the three-note halo | soft glide; longer echoes and a more resonant room |
+| fireworks | WARM springy synth bursts, no background drone | no glide; bright attack, restrained echo and room |
+| mandala | ORGAN slowly blooming over a single root | soft glide; rounded tone and a soft, spacious room |
+
+All five start in pentatonic JI at 220 Hz. Hold GO to edit the same eight
+settings as before. Scale, timbre, octave, background, visual scene and glide
+are remembered separately for each world; volume and speaker/jack remain
+global. All five visual scenes remain available in the scene row. The chosen
+world name appears in the settings header, even if its scene was customized.
+
+Switching worlds preserves the shared phrase garden and restores that world’s
+manual edits. It closes held notes and any in-progress recall. Room and echo
+levels ease into the new sound, and flash saves wait for a quiet pause rather
+than interrupting each click. A GO press that wakes a sleeping box only wakes
+it; use the next press to navigate.
+
+On upgrade, the previous settings are imported into the world matching the old
+scene. An existing three-world bank keeps its selected world and all manual
+edits, adding fireworks and mandala with their defaults. Existing volume,
+output and remembered phrases are retained.
+
+### The screen: five visual scenes
 
 The same notes, memories and gestures drive five scenes that differ in
 *composition and motion*, not decoration:
@@ -363,24 +394,22 @@ source notes are in `src/hal/board_pins.h`.
 
 ## What to check after flashing
 
-1. With fresh NVS it boots **playing** with PENTA JI, CHIME, 220 Hz, the quiet
-   drone and meadow. Otherwise it restores the saved background and other
+1. With fresh NVS it boots **playing** in the meadow: PENTA JI, MUSICBOX,
+   220 Hz and no background drone. Otherwise it restores the saved background and other
    settings. Every key sounds; if rows come out upside down, swap `3 - row`
    in `mode_instrument.cpp`.
 2. Keys stay clean **with no clicks/dropouts** while the UI is stressed —
    hold several keys, shake, switch scenes.
-3. Short BtnGO opens settings and returns; holding it while playing cycles
-   all seven timbres; background cycles through silence, root, drone and halo;
-   glide starts off and, in row 6, cycles off → soft → strong, affecting quick
-   same-row runs without collapsing chords; every choice survives a power
-   cycle (NVS), and the old boolean glide setting migrates to off/soft.
-   Old boolean background settings migrate to silence or the original drone.
-4. When no replay is active, shaking starts one remembered phrase (with its
-   timing bounded to 70–1200 ms between notes, not an instant burst); an empty
-   garden produces one safe note. Waving left/right steers the whole phrase
-   down/up; both tilts respond smoothly
-   — if an axis feels swapped, exchange `s_gravX` / `s_gravY` in
-   `imuStep()`.
+3. Short BtnGO cycles meadow → ocean → cosmos. A 0.7 s hold opens settings
+   exactly once; keeping it down or releasing it does not change the world.
+   A short GO in settings returns to play. Edit a world, visit the other four,
+   and return: its choices remain. Verify this again after a power cycle.
+   Volume and speaker/jack stay the same across worlds. Existing byte settings
+   migrate into the matching world, including legacy glide/background booleans.
+4. After releasing the keys, a shake recalls the latest phrase with its chord
+   onsets and 20 ms–5 s note lengths. Repeated swings recall the same pitches;
+   stronger swings play louder. The empty garden answers with one safe note.
+   Both tilts respond smoothly; ocean additionally bends pitch gently sideways.
 5. The 3.5 mm jack mutes the speaker (purely hardware — should just work).
    It is also the way to record the box cleanly: the tiny speaker does not
    do it justice.

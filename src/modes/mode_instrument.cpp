@@ -18,7 +18,6 @@ using namespace ga;
 
 namespace {
 constexpr float kImuPeriod = 0.02f;  // odczyt IMU 50 Hz
-constexpr float kNeutralCutoff = 7500.0f;
 
 // machanie: histereza energii ruchu (po odjęciu grawitacji), w g
 constexpr float kSwingOn = 0.55f;   // taki zamach gra
@@ -75,7 +74,7 @@ float s_windVelocity = 0.0f;
 
 void ModeInstrument::enter(ModeCtx& ctx) {
   settings::applyToEngine(ctx.engine);
-  ambient::setCutoffBase(kNeutralCutoff);
+  ambient::setCutoffBase(settings::worldSound().cutoffHz);
   windPhraseCancel(ctx);
   for (auto& landing : s_rowLanding) landing.valid = false;
   s_chimeStep = ga::scaleStepsPerOctave(settings::scale());  // start w środku
@@ -109,7 +108,7 @@ void ModeInstrument::exit(ModeCtx& ctx) {
   windPhraseCancel(ctx);
   ambient::gardenReleaseAll();
   ctx.engine.allNotesOff();
-  ambient::setCutoffBase(kNeutralCutoff);
+  ambient::setCutoffBase(settings::worldSound().cutoffHz);
   ambient::setSpaceBase(0.5f);  // głębia też wraca do neutrum, nie tylko jasność
   ctx.engine.setParam(Param::BendCents, 0.0f);
 }
@@ -156,11 +155,11 @@ void ModeInstrument::onKey(ModeCtx& ctx, int col, int row, bool down) {
   }
 }
 
-void ModeInstrument::onGoHold(ModeCtx& ctx) {
-  // przytrzymany GO: następna barwa, z dużym napisem zamiast tabelki stanu
-  settings::cyclePreset();
-  settings::applyToEngine(ctx.engine);
-  viz::toast(i18n::presetName(settings::preset()));
+void ModeInstrument::nextWorld(ModeCtx& ctx) {
+  exit(ctx);  // close held captures and cancel scheduled replay releases
+  settings::cycleWorld();
+  enter(ctx);
+  viz::toast(i18n::worldName(settings::world()));
 }
 
 void ModeInstrument::triggerChime(ModeCtx& ctx, float energy, float dir) {
@@ -267,10 +266,12 @@ void ModeInstrument::imuStep(ModeCtx& ctx) {
     // w stronę ciemna mocno, w stronę jasna delikatnie — neutralnie jest
     // już jasno, więc ekspresja mieszka w przyciemnianiu
     const float cutoff = s_tiltNorm >= 0.0f
-                             ? kNeutralCutoff * exp2f(0.65f * s_tiltNorm)
-                             : kNeutralCutoff * exp2f(2.4f * s_tiltNorm);
+                             ? settings::worldSound().cutoffHz * exp2f(0.65f * s_tiltNorm)
+                             : settings::worldSound().cutoffHz * exp2f(2.4f * s_tiltNorm);
     ambient::setCutoffBase(cutoff);
     viz::setTilt(s_tiltNorm);
+    ctx.engine.setParam(Param::BendCents,
+                        settings::worldSound().tiltBendCents * s_tiltNorm);
 
     // do/od siebie = głębia przestrzeni: od siebie dźwięk odpływa w pogłos
     // i echo, do siebie robi się suchy i bliski (jak przybliżanie ucha);

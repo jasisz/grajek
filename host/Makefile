@@ -16,6 +16,7 @@ CORE_CPP := $(CORE)/gk_garden.cpp \
             $(CORE)/gk_phrase_player.cpp \
             $(CORE)/gk_pulse.cpp \
             $(CORE)/gk_lullaby.cpp \
+            $(CORE)/gk_worlds.cpp \
             $(CORE)/gk_background.cpp
 
 SRC := main.cpp $(ENGINE_CPP)
@@ -27,6 +28,8 @@ all: $(BUILD)/grajek_host live
 test: $(BUILD)/face_down_gesture_test $(BUILD)/idle_sleep_test \
 	$(BUILD)/core_state_test \
 	$(BUILD)/memory_performance_test \
+	$(BUILD)/worlds_test \
+	$(BUILD)/settings_state_test \
 	$(BUILD)/echo_tape_test $(BUILD)/chorus_test \
 	$(BUILD)/audio_engine_test \
 	$(BUILD)/scale_registry_test $(BUILD)/i18n_pl_test $(BUILD)/i18n_en_test
@@ -34,6 +37,8 @@ test: $(BUILD)/face_down_gesture_test $(BUILD)/idle_sleep_test \
 	./$(BUILD)/idle_sleep_test
 	./$(BUILD)/core_state_test
 	./$(BUILD)/memory_performance_test
+	./$(BUILD)/worlds_test
+	./$(BUILD)/settings_state_test
 	./$(BUILD)/echo_tape_test
 	./$(BUILD)/chorus_test
 	./$(BUILD)/audio_engine_test
@@ -58,6 +63,17 @@ $(BUILD)/memory_performance_test: memory_performance_test.cpp $(CORE_CPP) $(HDR)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) memory_performance_test.cpp $(CORE_CPP) -o $@
 
+$(BUILD)/worlds_test: worlds_test.cpp $(CORE_CPP) $(HDR)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) worlds_test.cpp $(CORE_CPP) -o $@
+
+$(BUILD)/settings_state_test: settings_state_test.cpp $(APP)/settings.cpp \
+		$(APP)/settings.h $(APP)/ambient.h $(APP)/hal/audio_out.h $(APP)/viz.h \
+		$(APP)/i18n.cpp $(APP)/i18n.h $(wildcard stubs/*.h) $(CORE_CPP) $(ENGINE_CPP) $(HDR)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -Istubs settings_state_test.cpp $(APP)/settings.cpp \
+		$(APP)/i18n.cpp $(CORE_CPP) $(ENGINE_CPP) -o $@
+
 $(BUILD)/echo_tape_test: echo_tape_test.cpp $(ENGINE)/ga_echo.h \
 		$(ENGINE)/ga_dsp.h
 	@mkdir -p $(BUILD)
@@ -77,7 +93,7 @@ $(BUILD)/scale_registry_test: scale_registry_test.cpp $(ENGINE)/ga_scales.cpp \
 	$(CXX) $(CXXFLAGS) scale_registry_test.cpp $(ENGINE)/ga_scales.cpp -o $@
 
 I18N_DEPS := i18n_test.cpp $(APP)/i18n.cpp $(APP)/i18n.h \
-	$(CORE)/gk_background.h $(ENGINE)/ga_scales.h $(ENGINE)/ga_voice.h
+	$(CORE)/gk_background.h $(CORE)/gk_worlds.h $(ENGINE)/ga_scales.h $(ENGINE)/ga_voice.h
 
 $(BUILD)/i18n_pl_test: $(I18N_DEPS)
 	@mkdir -p $(BUILD)

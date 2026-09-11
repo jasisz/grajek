@@ -135,6 +135,16 @@ static_assert(sizeof(kPresetNames) / sizeof(kPresetNames[0]) ==
 
 namespace i18n {
 
+const char* worldName(gk::WorldId id) {
+  switch (id) {
+    case gk::WorldId::Ocean:  return tr(TextId::SceneOcean);
+    case gk::WorldId::Cosmos: return tr(TextId::SceneCosmos);
+    case gk::WorldId::Fireworks: return tr(TextId::SceneFireworks);
+    case gk::WorldId::Mandala: return tr(TextId::SceneMandala);
+    default:                  return tr(TextId::SceneMeadow);
+  }
+}
+
 const char* tr(TextId id) {
   const size_t idx = static_cast<size_t>(id);
   return idx < kTextCount ? kText[idx] : "";

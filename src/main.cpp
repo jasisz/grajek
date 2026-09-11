@@ -9,6 +9,7 @@
 #include "ambient.h"
 #include "firefly.h"
 #include "ga_engine.h"
+#include "gk_go_button.h"
 #include "goodnight.h"
 #include "hal/audio_out.h"
 #include "input/keys.h"
@@ -29,9 +30,7 @@ ga::Engine engine;
 // hardware contact). The push destination is passed explicitly instead.
 M5Canvas canvas;
 
-// Bez menu: pudełko albo GRA, albo pokazuje USTAWIENIA. Krótkie GO
-// przełącza między tymi dwoma światami, przytrzymane (podczas grania)
-// zmienia barwę. Granie to zawsze INSTRUMENT.
+// Short GO changes the musical world; hold GO opens full settings.
 ModeInstrument modeInstrument;
 ModeSettings modeSettings;
 
@@ -44,10 +43,7 @@ bool displaySleeping = false;
 uint32_t lastFrameMs = 0;
 uint32_t lastTickMs = 0;
 
-// GO: krótkie puszczenie = powrót do menu, przytrzymanie = akcja trybu
-// (w INSTRUMENT: następna barwa), powtarzana co 700 ms póki trzymany
-bool goLongUsed = false;
-uint32_t goNextActionMs = 600;
+gk::GoButton goButton;
 
 void switchTo(ModeCtx& ctx, Mode* next) {
   const bool refreshBackground = current != nullptr;
@@ -148,6 +144,9 @@ void loop() {
   const int n = input::keysPoll(ev, input::kMaxKeyEvents);
   ModeCtx ctx{engine, canvas};
 
+  const auto goAction = goButton.update(now, input::goPressed(),
+      input::goReleased(), inSettings, ambient::lullabyActive());
+
   // Physical state is global even when a mode switch intentionally suppresses
   // the musical meaning of events from this pass.
   for (int i = 0; i < n; ++i) {
@@ -156,27 +155,25 @@ void loop() {
   }
   if (input::goPressed()) goodnight::wakeFromKey();
 
-  // GO: przytrzymanie PODCZAS GRANIA = następna barwa (powtarzane),
-  // krótkie puszczenie = przeskok granie <-> ustawienia
   bool justSwitched = false;
-  if (!inSettings && input::goHeldMs() >= goNextActionMs) {
-    goodnight::wakeFromKey();
-    current->onGoHold(ctx);
-    goNextActionMs += 700;
-    goLongUsed = true;
-  }
-  if (input::goReleased()) {
-    goodnight::wakeFromKey();  // the side button is a physical key too
-    if (!goLongUsed) {
-      inSettings = !inSettings;
-      switchTo(ctx, inSettings ? (Mode*)&modeSettings
-                               : (Mode*)&modeInstrument);
-      justSwitched = true;  // klawisz-cyfra z tego przebiegu nie zagra nuty
-    } else {
-      settings::save();  // persist only the final preset reached by the hold
-    }
-    goLongUsed = false;
-    goNextActionMs = 600;
+  switch (goAction) {
+    case gk::GoAction::NextWorld:
+      modeInstrument.nextWorld(ctx);
+      justSwitched = true;
+      break;
+    case gk::GoAction::OpenSettings:
+      inSettings = true;
+      switchTo(ctx, &modeSettings);
+      justSwitched = true;
+      break;
+    case gk::GoAction::Play:
+      inSettings = false;
+      switchTo(ctx, &modeInstrument);
+      justSwitched = true;
+      break;
+    case gk::GoAction::Wake:
+    case gk::GoAction::None:
+      break;
   }
 
   if (!justSwitched)
@@ -235,16 +232,6 @@ void loop() {
     pulseChord[i] = ambient::backgroundNoteCents(i);
   pulse::tick(ambient::lullabyActive(), pulseChord, pulseChordCount);
   firefly::tick();
-
-
-
-
-
-
-
-
-
-
 
   delay(2);  // breathing room for WDT/USB; audio lives on the other core anyway
 }
